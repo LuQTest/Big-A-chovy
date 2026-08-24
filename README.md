@@ -252,7 +252,30 @@ python3 -m py_compile \
 python3 -m unittest discover -s daily-stock-analysis/scripts -p 'test_*.py'
 ```
 
-## 八、规则文档
+## 八、模型使用建议（当前测试记录）
+
+以下结论来自当前实际使用体验，属于经验记录，不代表模型的客观性能排名。
+
+### 盘中分析
+
+| 模型 | 当前评价 |
+| --- | --- |
+| Luna Max 1.5x | 非常保守 |
+| DeepSeek V4 Flash | 整体偏保守 |
+| DeepSeek V4 Flash 0731 | 整体偏保守 |
+| **Gemini 3.7 Flash** | **当前使用，偏激进** |
+
+### 不建议模型
+
+- `hy3`：响应较慢。
+- `DeepSeek V4 Pro`：成本较高。
+
+### 自动复盘
+
+- `Sol xhigh`：当前自动复盘模型。
+- `Ox Alpha`：测试中，主要在深夜使用。
+
+## 九、规则文档
 
 使用前建议先阅读：
 
