@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A股实时筛选看板</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <h1>A股实时筛选看板</h1>
+    <span id="market-status" class="status-badge">连接中...</span>
+    <span id="last-refresh" class="meta-text"></span>
+    <span id="elapsed-time" class="meta-text"></span>
+    <span id="next-refresh" class="meta-text next-refresh"></span>
+    <span id="fetch-warn" class="meta-text fetch-warn"></span>
+  </div>
+  <div class="topbar-right">
+    <div class="cache-info" id="cache-info" title="K线缓存统计"></div>
+    <label class="toggle"><input type="checkbox" id="skip-ann" checked> 公告检查</label>
+    <label class="toggle"><input type="checkbox" id="skip-capital" checked> 资金排序</label>
+    <button id="prewarm-btn" class="btn">预热K线</button>
+    <button id="refresh-btn" class="btn">立即刷新</button>
+    <button id="force-refresh-btn" class="btn btn-warn">强制刷新</button>
+    <button id="clear-cooldown-btn" class="btn">清除冷却</button>
+    <button id="md-btn" class="btn">下载MD</button>
+  </div>
+</header>
+
+<div class="banner" id="snapshot-banner" style="display:none"></div>
+
+<div class="market-panel" id="market-panel">
+  <div class="mp-section">
+    <span class="mp-label">数据时间</span>
+    <span class="mp-value" id="mp-timestamp">-</span>
+  </div>
+  <div class="mp-section">
+    <span class="mp-label">数据源</span>
+    <span class="mp-value" id="mp-source">-</span>
+  </div>
+  <div class="mp-section">
+    <span class="mp-label">涨/跌</span>
+    <span class="mp-value" id="mp-breadth">-</span>
+  </div>
+  <div class="mp-section mp-indices" id="mp-indices"></div>
+  <div class="mp-section mp-warnings" id="mp-warnings"></div>
+</div>
+
+<div class="thermometer" id="thermometer" style="display:none">
+  <div class="therm-badge" id="therm-badge">-</div>
+  <div class="therm-detail" id="therm-detail">
+    <span class="therm-item">涨停 <b id="therm-limit-up">-</b></span>
+    <span class="therm-item">跌停 <b id="therm-limit-down">-</b></span>
+    <span class="therm-item">涨跌比 <b id="therm-adv-dec">-</b></span>
+    <span class="therm-item">指数涨/跌 <b id="therm-idx">-</b></span>
+  </div>
+  <div class="therm-msg" id="therm-msg"></div>
+</div>
+
+<nav class="tab-groups" id="tab-bar">
+  <div class="tab-group" data-group="short">
+    <button class="group-tab active" data-group="short">短线池 <span class="tab-count" id="cnt-short"></span></button>
+    <div class="sub-tabs">
+      <button class="sub-tab active" data-tab="intersection">交集 <span class="sub-count" id="cnt-intersection"></span></button>
+      <button class="sub-tab" data-tab="ultra">超短 <span class="sub-count" id="cnt-ultra"></span></button>
+      <button class="sub-tab" data-tab="trend-obs">观察 <span class="sub-count" id="cnt-trend-obs"></span></button>
+      <button class="sub-tab" data-tab="trend-conf">确认 <span class="sub-count" id="cnt-trend-conf"></span></button>
+    </div>
+  </div>
+  <div class="tab-group" data-group="statemachine">
+    <button class="group-tab" data-group="statemachine">交集状态机 <span class="tab-count" id="cnt-statemachine-group"></span></button>
+    <div class="sub-tabs">
+      <button class="sub-tab" data-tab="pre">准交集 <span class="sub-count" id="cnt-pre"></span></button>
+      <button class="sub-tab" data-tab="triggered">等待回踩 <span class="sub-count" id="cnt-triggered"></span></button>
+      <button class="sub-tab" data-tab="late">迟到 <span class="sub-count" id="cnt-late"></span></button>
+    </div>
+  </div>
+  <div class="tab-group" data-group="capital">
+    <button class="group-tab" data-group="capital">资金分析 <span class="tab-count" id="cnt-capital-group"></span></button>
+    <div class="sub-tabs">
+      <button class="sub-tab" data-tab="capital">资金排名 <span class="sub-count" id="cnt-capital"></span></button>
+      <button class="sub-tab" data-tab="flow">资金追踪 <span class="sub-count" id="cnt-flow"></span></button>
+    </div>
+  </div>
+  <div class="tab-group" data-group="low">
+    <button class="group-tab active" data-group="low">低吸 & 观察 <span class="tab-count" id="cnt-low-group"></span></button>
+    <div class="sub-tabs">
+      <button class="sub-tab" data-tab="low-ultra">低吸超短 <span class="sub-count" id="cnt-low-ultra"></span></button>
+      <button class="sub-tab" data-tab="low-trend">低吸趋势 <span class="sub-count" id="cnt-low-trend"></span></button>
+      <button class="sub-tab" data-tab="low-open">低开洗盘 <span class="sub-count" id="cnt-low-open"></span></button>
+      <button class="sub-tab" data-tab="watchlist">明日观察 <span class="sub-count" id="cnt-watchlist"></span></button>
+    </div>
+  </div>
+  <div class="tab-group" data-group="sector">
+    <button class="group-tab" data-group="sector">板块 <span class="tab-count" id="cnt-sectors"></span></button>
+  </div>
+  <div class="tab-group" data-group="sticky">
+    <button class="group-tab" data-group="sticky">跟踪中 <span class="tab-count" id="cnt-sticky-group"></span></button>
+    <div class="sub-tabs">
+      <button class="sub-tab" data-tab="sticky">候选黏性 <span class="sub-count" id="cnt-sticky"></span></button>
+    </div>
+  </div>
+</nav>
+
+<main class="content">
+  <div id="table-container">
+    <div class="placeholder">等待数据加载...</div>
+  </div>
+</main>
+
+<footer class="footer" id="footer"></footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

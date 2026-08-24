@@ -1,0 +1,4 @@
+interface:
+  display_name: "A股每日短线分析"
+  short_description: "基于实时盘面筛选A股超短线与短线趋势机会并制定风控计划"
+  default_prompt: "Use $daily-stock-analysis to screen today’s A-share market and return a risk-controlled short-term watchlist."

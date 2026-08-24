@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# AI assistant / IDE internals
+.claude/
+.omo/
+.workbuddy/
+
+# Backup zips
+*.zip
+
+# Obsidian (personal note app config, not project source)
+.obsidian/
+
+# Runtime cache / snapshot (regenerated on each run, not source)
+daily-stock-analysis/scripts/.kline_cache.json
+daily-stock-analysis/scripts/flow_snapshot.json
+daily-stock-analysis/scripts/.announcement_risk_cache.json
+daily-stock-analysis/scripts/watchlist_breakout_state.json
+daily-stock-analysis/.rollback-backup-*/
+
+# Runtime state & data (generated at runtime, not framework source)
+daily-stock-analysis/scripts/last_valid_result.json
+daily-stock-analysis/scripts/intersection_state.json
+daily-stock-analysis/scripts/holdings.json
+daily-stock-analysis/scripts/gui_settings.json
+daily-stock-analysis/scripts/.em_nontrading_refresh
+tools/shadow_data/shadow_samples.json
