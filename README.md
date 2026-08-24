@@ -277,7 +277,14 @@ python3 -m unittest discover -s daily-stock-analysis/scripts -p 'test_*.py'
 - `Sol xhigh`：当前自动复盘模型。
 - `Ox Alpha`：测试中，主要在深夜使用。
 
-## 九、规则文档
+## 九、已知问题与待改进
+
+以下问题已知存在，后续需要通过 Agent 修改代码或启动配置解决：
+
+1. **筛选结果保存路径**：部分 GUI 和实时看板代码仍使用本机固定路径。后续应改为基于项目根目录的相对路径，或提供可配置的输出目录，方便其他使用者直接运行。
+2. **网络代理依赖 Clash Verge**：当前运行环境需要通过 Clash Verge 的系统代理访问行情接口，直连行情服务会被封锁。使用实时筛选或看板前，应确认 Clash Verge 已启动并开启系统代理；命令行可使用 `--network-mode proxy`。
+
+## 十、规则文档
 
 使用前建议先阅读：
 
