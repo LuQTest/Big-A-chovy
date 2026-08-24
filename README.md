@@ -12,6 +12,8 @@
 - Python 3.10 或更高版本，建议使用 Python 3.13。
 - 能访问行情接口的网络环境。部分网络需要先开启 Clash 等系统代理。
 
+> 当前版本未做 Windows 适配。项目中的 `.command` 启动器、macOS `scutil` 代理检测、`open`/`osascript` 和部分进程管理命令均按 macOS 编写。Windows 用户可以自行尝试直接运行核心 Python 脚本，但 GUI、实时看板启动、代理检测和路径行为不保证正常，也暂不提供 Windows 专用安装或启动方案。
+
 脚本依赖尽量使用 Python 标准库，并对可选依赖提供了降级处理：
 
 ```bash
