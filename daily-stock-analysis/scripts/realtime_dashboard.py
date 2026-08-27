@@ -18,6 +18,7 @@ import re
 import threading
 import time
 import urllib.request
+import ssl
 import webbrowser
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -108,8 +109,12 @@ def _test_proxy(proxy_url: str, timeout: int = 5) -> bool:
             return False
         if p.hostname in ("127.0.0.1", "localhost", "::1") and p.port == PORT:
             return False
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        https_handler = urllib.request.HTTPSHandler(context=ctx)
         handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-        opener = urllib.request.build_opener(handler)
+        opener = urllib.request.build_opener(handler, https_handler)
         req = urllib.request.Request(
             # 2026-07-30: push2 对海外出口间歇 502 且 302 到 push2delay；
             # 用 push2delay 做健康检查（A股实时，100%稳定），避免误判"代理不可用"。

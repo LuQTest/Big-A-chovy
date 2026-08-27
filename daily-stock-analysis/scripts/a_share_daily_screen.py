@@ -3604,7 +3604,7 @@ def render_markdown(result: Dict[str, Any]) -> str:
             amount_yi(r["amount"]), _fmt(r.get("volume_ratio")), r["industry"], ind_counts.get(r.get("industry", ""), 0),
             r["resonance"], f"{_fmt(r.get('high_pull'))}pct", r["vwap_state"], f"{r.get('main_pct',0):.1f}%",
             flow_amount_str(r.get("super_net", 0)),
-            r.get("dominance_label") or r.get("super_lead", "✗"),
+            r.get("dominance_label") or r.get("super_lead") or "未计算",
             flow_amount_str(r.get("flow_5m_inc", 0)), r.get("flow_status", ""), r["risk"], announcement_label(r),
         ] for r in result["low_ultra"]]
         lines += ["", "## 低吸超短线 A/B/C", markdown_table(["类", "代码", "名称", "现价", "涨幅", "换手率", "成交额", "量比", "板块", "板块内候选", "共振", "高位回落", "均价线", "主力净占比", "超大单", "超单主导", "5分钟增量", "资金状态", "风险", "公告风险"], rows)]

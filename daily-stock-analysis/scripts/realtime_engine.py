@@ -984,15 +984,37 @@ def run_screening(
     low_trend_rows: list = []
     if "low" in modes and not fallback_snapshot:
         for e in enriched:
+            exclude, reason = screen._should_exclude_from_low_absorb(e, flow_history)
+            if exclude:
+                continue  # 硬黑名单或高位派发降权，不进入低吸候选
             cls, tags, score = screen.low_ultra_class(e, stats, after_1420)
+            dom_type, dom_label = screen.evaluate_dominance_type(e, flow_history)
             if cls != "C" or (e.change >= 2.2 and (e.turnover > 10 or e.change > 5.2 or e.volume_ratio > 6)):
                 low_ultra_rows.append(
-                    {**asdict(e), "class": cls, "risk": "/".join(tags) if tags else "无", "score": score, "resonance": "是" if screen.has_resonance(e, stats) else "否"}
+                    {
+                        **asdict(e),
+                        "class": cls,
+                        "risk": "/".join(tags) if tags else "无",
+                        "score": score,
+                        "resonance": "是" if screen.has_resonance(e, stats) else "否",
+                        "dominance_type": dom_type,
+                        "dominance_label": dom_label,
+                        "super_lead": dom_label,
+                    }
                 )
             cls2, tags2, score2 = screen.low_trend_class(e, stats, after_1420)
             if cls2 != "C" or (e.change >= 2.5 and (e.change > 6 or e.turnover > 9 or e.ma20_dist > 0.15)):
                 low_trend_rows.append(
-                    {**asdict(e), "class": cls2, "risk": "/".join(tags2) if tags2 else "无", "score": score2, "ma_state": f"MA5/10/20上方,5日{'上行' if e.ma5 > e.prev_ma5 else '未上行'},10日{'走平上行' if e.ma10 >= e.prev_ma10 else '下行'}"}
+                    {
+                        **asdict(e),
+                        "class": cls2,
+                        "risk": "/".join(tags2) if tags2 else "无",
+                        "score": score2,
+                        "ma_state": f"MA5/10/20上方,5日{'上行' if e.ma5 > e.prev_ma5 else '未上行'},10日{'走平上行' if e.ma10 >= e.prev_ma10 else '下行'}",
+                        "dominance_type": dom_type,
+                        "dominance_label": dom_label,
+                        "super_lead": dom_label,
+                    }
                 )
         low_ultra_rows = sorted(low_ultra_rows, key=lambda r: (class_order[r["class"]], -r["score"], abs(r["change"] - 3.4)))[: max(top, 15)]
         low_trend_rows = sorted(low_trend_rows, key=lambda r: (class_order[r["class"]], -r["score"], abs(r["change"] - 3.8)))[: max(top, 15)]
