@@ -13,8 +13,10 @@ from shadow_tracker import (
     collect_samples_from_report,
     fetch_t1_day_kline_extremes,
     find_next_trading_day_reports,
+    pending_t1_label,
     calculate_t1_for_sample,
     generate_report,
+    update_all_t1_metrics,
 )
 from a_share_daily_screen import _parse_sina_kline
 from scan_reports import evaluate_low_absorb_candidate
@@ -26,6 +28,44 @@ class ShadowTrackerTests(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_pending_t1_date_is_dynamic_and_migrates_old_fixed_label(self):
+        """待结算提示不得硬编码历史日期；已有旧标签也应在更新时迁移。"""
+        self.assertEqual(
+            pending_t1_label(self.test_dir, "20260826"),
+            "待下一个交易日",
+        )
+
+        source_day_dir = os.path.join(self.test_dir, "20260826")
+        os.makedirs(source_day_dir, exist_ok=True)
+        next_day_dir = os.path.join(self.test_dir, "20260827")
+        os.makedirs(next_day_dir, exist_ok=True)
+        next_report = os.path.join(next_day_dir, "A股筛选结果_20260827_0930.md")
+        with open(next_report, "w", encoding="utf-8") as fp:
+            fp.write("数据时间：2026-08-27 09:30:00，状态：运行。\n")
+
+        self.assertEqual(
+            pending_t1_label(self.test_dir, "20260826"),
+            "待下一个交易日(20260827)",
+        )
+
+        db = {
+            "samples": {
+                "coalition": [{
+                    "date": "20260826",
+                    "code": "600909",
+                    "trigger_price": 8.34,
+                    "t1_result": {
+                        "checked": False,
+                        "t1_date": "待下一个交易日(8/24)",
+                        "source": "unavailable",
+                    },
+                }],
+            },
+        }
+        update_all_t1_metrics(db, reports_dir=self.test_dir)
+        self.assertEqual(db["samples"]["coalition"][0]["t1_result"]["t1_date"], "待下一个交易日(20260827)")
+        self.assertNotIn("8/24", db["samples"]["coalition"][0]["t1_result"]["t1_date"])
 
     def test_find_next_trading_day_reports_and_exact_0945_metrics(self):
         """测试精准定位次日报告目录，并在多快照(09:40, 09:45, 10:30, 15:00)中精确核算09:45收益与日内最大浮盈/回撤。"""

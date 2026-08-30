@@ -35,6 +35,7 @@ for import_path in (PROJECT_ROOT, TOOLS_DIR, SCRIPTS_DIR):
         sys.path.insert(0, str(import_path))
 
 from tools.report_parser import parse_screening_report, get_report_files
+from tools.rule_config import RULE_CONFIG, is_complete_shadow_result, shadow_targets
 
 SHADOW_DATA_DIR = Path(__file__).resolve().parent / "shadow_data"
 SHADOW_DB_FILE = SHADOW_DATA_DIR / "shadow_samples.json"
@@ -51,31 +52,21 @@ def init_db() -> Dict[str, Any]:
         try:
             data = json.loads(SHADOW_DB_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                # 迁移：补充后续新增的机制类别（8/23 龙头分歧识别·待验证项⑨）
                 data.setdefault("targets", {})
                 data.setdefault("samples", {})
-                if "divergence" not in data["targets"]:
-                    data["targets"]["divergence"] = {
-                        "name": "龙头分歧识别(divergence_leader)", "target_samples": 20}
-                data["samples"].setdefault("divergence", [])
+                # 迁移：为新配置登记的类别补齐空结构，但不覆盖已有样本
+                # 或旧目标值；目标值漂移由 validate_consistency.py 报告。
+                for category, meta in shadow_targets().items():
+                    data["targets"].setdefault(category, dict(meta))
+                    data["samples"].setdefault(category, [])
                 return data
         except Exception:
             pass
     return {
         "version": "2.0",
         "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "targets": {
-            "coalition": {"name": "合力主升主导", "target_samples": 20},
-            "breakout": {"name": "观察池突破状态机", "target_samples": 20},
-            "sector_boost": {"name": "主线板块协同加分器", "target_samples": 20},
-            "divergence": {"name": "龙头分歧识别(divergence_leader)", "target_samples": 20},
-        },
-        "samples": {
-            "coalition": [],
-            "breakout": [],
-            "sector_boost": [],
-            "divergence": [],
-        }
+        "targets": shadow_targets(),
+        "samples": {category: [] for category in shadow_targets()},
     }
 
 
@@ -122,6 +113,8 @@ def collect_samples_from_report(filepath: str, db: Dict[str, Any]) -> int:
     date_str = rep["date"]
     time_str = rep["time"]
 
+    for category in ("coalition", "breakout", "sector_boost"):
+        db.setdefault("samples", {}).setdefault(category, [])
     existing_keys = {
         cat: {f"{s['code']}_{s['date']}" for s in db["samples"][cat]}
         for cat in ("coalition", "breakout", "sector_boost")
@@ -266,6 +259,19 @@ def find_next_trading_day_reports(reports_dir: str, date_str: str) -> List[str]:
     return []
 
 
+def pending_t1_label(reports_dir: str, date_str: str) -> str:
+    """生成待结算提示；有下一交易日报告时带真实日期，否则不猜日期。"""
+    try:
+        next_reports = find_next_trading_day_reports(reports_dir, date_str)
+        if next_reports:
+            next_date = parse_screening_report(next_reports[0]).get("date")
+            if next_date:
+                return f"待下一个交易日({next_date})"
+    except Exception:
+        pass
+    return "待下一个交易日"
+
+
 def fetch_t1_day_kline_extremes(code: str, t1_date: str) -> Optional[Tuple[float, float]]:
     """尝试从日K数据获取该股票在次日交易日的真实全日最高价与最低价。"""
     try:
@@ -306,12 +312,13 @@ def calculate_t1_for_sample(sample: Dict[str, Any], t1_reports: List[str]) -> Op
             t1_date = rep["date"]
             t_str = rep.get("time", "")
 
-            # 计算与 09:45 (585 分钟) 的时间差
+            # 计算与配置的目标时刻（默认 09:45）的时间差
             time_diff = float("inf")
             m = re.match(r"^(\d{1,2}):(\d{2})", t_str)
             if m:
                 h, mi = int(m.group(1)), int(m.group(2))
-                time_diff = abs((h * 60 + mi) - 585)
+                target_minute = int(RULE_CONFIG["shadow"]["t1_target_minute"])
+                time_diff = abs((h * 60 + mi) - target_minute)
 
             for table_name, rows in rep.get("tables", {}).items():
                 for row in rows:
@@ -352,7 +359,8 @@ def calculate_t1_for_sample(sample: Dict[str, Any], t1_reports: List[str]) -> Op
     if extremes_complete:
         max_gain = round((p_high - trigger_price) / trigger_price * 100, 2)
         max_dd = round((p_low - trigger_price) / trigger_price * 100, 2)
-        is_false_breakout: Any = p_low < trigger_price * 0.985  # 跌破 1.5% 止损线判定为假突破
+        stop_pct = float(RULE_CONFIG["shadow"]["false_breakout_stop_pct"])
+        is_false_breakout: Any = p_low < trigger_price * (1.0 - stop_pct / 100.0)
         extremes_source = T1_SOURCE_DAILY_KLINE
     else:
         max_gain = T1_PENDING
@@ -374,9 +382,9 @@ def calculate_t1_for_sample(sample: Dict[str, Any], t1_reports: List[str]) -> Op
     }
 
 
-def update_all_t1_metrics(db: Dict[str, Any]) -> None:
+def update_all_t1_metrics(db: Dict[str, Any], reports_dir: Optional[str] = None) -> None:
     """自动核算所有样本的 T+1 次日真实表现（含 divergence 等全部机制类别）。"""
-    reports_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "筛选结果"))
+    reports_dir = reports_dir or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "筛选结果"))
     for category in sorted(db["samples"].keys()):
         for sample in db["samples"][category]:
             date_str = sample["date"]
@@ -388,7 +396,7 @@ def update_all_t1_metrics(db: Dict[str, Any]) -> None:
             if sample.get("t1_result") is None:
                 sample["t1_result"] = {
                     "checked": False,
-                    "t1_date": "待下一个交易日(8/24)",
+                    "t1_date": pending_t1_label(reports_dir, date_str),
                     "t1_0945_price": None,
                     "t1_0945_return_pct": None,
                     "t1_max_gain_pct": T1_PENDING,
@@ -397,6 +405,13 @@ def update_all_t1_metrics(db: Dict[str, Any]) -> None:
                     "extremes_complete": False,
                     "source": T1_SOURCE_UNAVAILABLE,
                 }
+            elif (
+                isinstance(sample.get("t1_result"), dict)
+                and not sample["t1_result"].get("checked")
+                and sample["t1_result"].get("source") == T1_SOURCE_UNAVAILABLE
+            ):
+                # 迁移旧版本写入的固定日期提示，避免历史样本继续显示错误日期。
+                sample["t1_result"]["t1_date"] = pending_t1_label(reports_dir, date_str)
 
 
 def generate_report(db: Dict[str, Any]) -> str:
@@ -416,12 +431,7 @@ def generate_report(db: Dict[str, Any]) -> str:
         pct = count / target * 100
 
         # 计算指标
-        evaluated_samples = [
-            s for s in samples
-            if s.get("t1_result")
-            and s["t1_result"].get("checked")
-            and s["t1_result"].get("extremes_complete") is True
-        ]
+        evaluated_samples = [s for s in samples if is_complete_shadow_result(s.get("t1_result"))]
         pending_extremes = any(
             s.get("t1_result")
             and s["t1_result"].get("extremes_complete") is False
@@ -436,7 +446,7 @@ def generate_report(db: Dict[str, Any]) -> str:
             avg_dd = f"{sum(s['t1_result']['t1_max_drawdown_pct'] for s in evaluated_samples) / len(evaluated_samples):+.2f}%"
             false_bo = f"{sum(1 for s in evaluated_samples if s['t1_result'].get('is_false_breakout')) / len(evaluated_samples) * 100:.1f}%"
         else:
-            win_rate = "0.0% (待补算日K极值)" if pending_extremes else "0.0% (待8/24结算)"
+            win_rate = "0.0% (待补算日K极值)" if pending_extremes else "0.0% (待下一个交易日结算)"
             avg_ret = "0.00%"
             avg_gain = "0.00%"
             avg_dd = "0.00%"
@@ -489,16 +499,8 @@ def scan_and_update(date_str: Optional[str] = None) -> None:
     db = {
         "version": "2.0",
         "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "targets": {
-            "coalition": {"name": "合力主升主导", "target_samples": 20},
-            "breakout": {"name": "观察池突破状态机", "target_samples": 20},
-            "sector_boost": {"name": "主线板块协同加分器", "target_samples": 20},
-        },
-        "samples": {
-            "coalition": [],
-            "breakout": [],
-            "sector_boost": [],
-        }
+        "targets": shadow_targets(),
+        "samples": {category: [] for category in ("coalition", "breakout", "sector_boost")},
     }
     for cat, arr in previous.get("samples", {}).items():
         if cat not in db["samples"] and arr:

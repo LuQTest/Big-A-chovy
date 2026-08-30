@@ -43,14 +43,16 @@ for p in (str(PROJECT_ROOT), str(PROJECT_ROOT / "tools")):
 
 from tools.report_parser import parse_screening_report  # noqa: E402
 from tools.shadow_tracker import init_db, save_db, SHADOW_DB_FILE  # noqa: E402
+from tools.rule_config import RULE_CONFIG  # noqa: E402
 
 # ---- 参数区（初值·影子期校准；改动需留痕）----
-D1_MIN_MAINP = 5.0    # S1: 主力净占比下限（巨石隔离锚：巨石始终<5%）
-D1_LOOKBACK = 5       # S1: 回看快照数（要求 i >= LOOKBACK 才允许触发）
-D1_RISE = 1.5         # S1: 最小升幅（pct 点）
-D2_PULLBACK = 1.0     # S2: 高位回落上限 pct
-D3_MIN_SECTOR = 2     # S3: 板块内候选下限
-BYPASS_RATIO = 0.20   # 场景B: 超单/主力 上限
+DIVERGENCE_CONFIG = RULE_CONFIG["divergence"]
+D1_MIN_MAINP = DIVERGENCE_CONFIG["min_main_pct_exclusive"]  # S1: 主力净占比下限
+D1_LOOKBACK = DIVERGENCE_CONFIG["lookback_snapshots"]        # S1: 回看快照数
+D1_RISE = DIVERGENCE_CONFIG["min_rise_pct"]                  # S1: 最小升幅（pct 点）
+D2_PULLBACK = DIVERGENCE_CONFIG["max_pullback_exclusive"]    # S2: 高位回落上限 pct
+D3_MIN_SECTOR = DIVERGENCE_CONFIG["min_sector_candidates"]   # S3: 板块内候选下限
+BYPASS_RATIO = DIVERGENCE_CONFIG["bypass_ratio_exclusive"]   # 场景B: 超单/主力上限
 
 REPORTS_ROOT = PROJECT_ROOT / "筛选结果"
 

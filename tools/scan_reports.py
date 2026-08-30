@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-筛选报告扫描与规则判定工具
+筛选报告扫描与规则诊断工具（非权威交易裁决）
 支持单文件解析、全天多时段扫描、5/5 与 4/5 候选过滤、在盯清单跟踪与信号衰减检测。
+输出仅用于报告审计和候选发现；最终交易裁决由 `盘中` skill 按根目录《选股框架.md》执行。
 """
 
 import os
@@ -11,8 +12,12 @@ import re
 import argparse
 from typing import Dict, List, Any, Optional
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(TOOLS_DIR)
+sys.path.insert(0, TOOLS_DIR)
+sys.path.insert(0, PROJECT_ROOT)
 from report_parser import parse_screening_report, get_report_files
+from tools.rule_config import RULE_CONFIG
 
 BASE_REPORTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "筛选结果"))
 
@@ -108,6 +113,7 @@ def evaluate_low_absorb_candidate(row: Dict[str, str], is_morning_a: bool = Fals
     super_order_str = row.get("超大单", "0")
     super_lead_str = row.get("超单主导", "")
     announcement = row.get("公告风险", "clean")
+    low_cfg = RULE_CONFIG["screening"]["low_absorb"]
 
     checks = {}
     fails = []
@@ -129,12 +135,13 @@ def evaluate_low_absorb_candidate(row: Dict[str, str], is_morning_a: bool = Fals
     using_locked = locked_pullback is not None
 
     rebound_pass = False
-    if check_pullback < 1.0 and main_pct > 5.0:
-        rebound_pass = True
-    elif check_pullback < 2.0 and main_pct > 10.0:
-        rebound_pass = True
-    elif check_pullback < 3.0 and main_pct > 15.0:
-        rebound_pass = True
+    for tier in low_cfg["pullback_tiers"]:
+        if (
+            check_pullback < float(tier["max_pullback_exclusive"])
+            and main_pct > float(tier["main_pct_min_exclusive"])
+        ):
+            rebound_pass = True
+            break
 
     if rebound_pass:
         checks["main_fund_pullback"] = True
@@ -145,7 +152,12 @@ def evaluate_low_absorb_candidate(row: Dict[str, str], is_morning_a: bool = Fals
         fails.append(f"主力/回落未匹配(主力{main_pct:.1f}%, 回落{pullback:.2f}%{lock_note})")
 
     # 3. 5分钟增量检查
-    min_inc5 = 500.0 if is_morning_a else 100.0
+    min_inc5_cny = (
+        float(low_cfg["flow_5m_a_min"])
+        if is_morning_a
+        else float(low_cfg["flow_5m_b_min"])
+    )
+    min_inc5 = min_inc5_cny / 10_000.0
     if inc5_wan >= min_inc5:
         checks["inc5"] = True
         passes += 1
@@ -158,12 +170,20 @@ def evaluate_low_absorb_candidate(row: Dict[str, str], is_morning_a: bool = Fals
     super_wan = parse_amount(super_order_str)
 
     dominance_label = "✗"
-    if super_wan < 0:
+    if RULE_CONFIG["dominance"]["negative_super_veto"] and super_wan < 0:
         checks["super_lead"] = False
         fails.append("超大单为负，一票否决")
-    elif super_lead_str in ["✓", "✓(绝对)"]:
+    elif super_lead_str in {
+        "✓",
+        RULE_CONFIG["dominance"]["absolute"]["label"],
+        RULE_CONFIG["dominance"]["coalition"]["label"],
+    }:
         checks["super_lead"] = True
-        dominance_label = "✓(绝对)"
+        dominance_label = (
+            RULE_CONFIG["dominance"]["coalition"]["label"]
+            if super_lead_str == RULE_CONFIG["dominance"]["coalition"]["label"]
+            else RULE_CONFIG["dominance"]["absolute"]["label"]
+        )
         passes += 1
     elif super_lead_str == "✓(合力)":
         checks["super_lead"] = True
@@ -174,7 +194,7 @@ def evaluate_low_absorb_candidate(row: Dict[str, str], is_morning_a: bool = Fals
         fails.append("生产报告未给出严格超单主导标签")
 
     # 5. 板块共振或联动
-    if resonance or plate_count >= 2:
+    if resonance or plate_count >= int(low_cfg["resonance_candidates_min"]):
         checks["plate_resonance"] = True
         passes += 1
     else:

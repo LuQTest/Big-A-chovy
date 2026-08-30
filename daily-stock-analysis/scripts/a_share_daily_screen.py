@@ -41,6 +41,14 @@ from zoneinfo import ZoneInfo
 
 EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281"
 SCRIPT_DIR = Path(__file__).resolve().parent
+# The screener is also run directly as a script.  Add the project root before
+# importing the shared executable-parameter registry so both direct execution
+# and test/module imports use the same configuration.
+PROJECT_ROOT = SCRIPT_DIR.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from tools.rule_config import RULE_CONFIG, get_rule_config  # noqa: E402
+
 TZ = ZoneInfo("Asia/Shanghai")
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X) daily-stock-analysis/1.0"
 SSL_CONTEXT = ssl._create_unverified_context()
@@ -201,51 +209,7 @@ ANNOUNCEMENT_REQUEST_TIMEOUT_SECONDS = 4
 # for a new position.  It never reads holdings.json or uses simulated trades.
 INTERSECTION_STATE_FILE = SCRIPT_DIR / "intersection_state.json"
 INTERSECTION_CALIBRATION_FILE = SCRIPT_DIR / "intersection_calibration.json"
-DEFAULT_INTERSECTION_CONFIG = {
-    # ── 原有：交易时间门槛 / 过热 / 信号年龄（保持不变）──
-    "confirmation_snapshots": 2,
-    "morning_cutoff": "11:00",
-    "afternoon_start": "13:05",
-    "afternoon_buy_deadline": "14:20",
-    "overheat_change_pct": 4.5,
-    "overheat_turnover_pct": 8.0,
-    "signal_age_window_minutes": 30,
-    # ── 四阶段状态机新增参数（全部可调）──
-    # 交集事件基准：超短池 ∩ 趋势确认池(strict_trend)。双池交集从"买入信号"
-    # 改为"启动事件"，真正买点由交集后的缩量回踩产生。
-    "intersection_basis": "strict_trend",   # 仅作记录，引擎据此计算 dual_pool
-    # 准交集四道门槛（全部满足才进入"准交集"预警）
-    "pre_gate_main_net": True,      # 主力净流入（main_net>0）
-    "pre_gate_flow_5m": True,       # 5分钟资金为正（flow_5m_inc>0）
-    "pre_gate_above_vwap": True,    # 价格位于均价线上方
-    "pre_gate_resonance": False,    # 板块共振已降为参考项（加权不否决）
-    # 迟到过滤（首次交集时任一满足即标记"迟到交集"，不产生买点）
-    "late_change_pct": 4.6,         # 涨幅已超过
-    "late_vwap_dist_pct": 1.2,      # 距VWAP超过（%）
-    "late_turnover_pct": 7.0,       # 换手率超过
-    "late_high_pull_pct": 1.5,      # 高位回撤已超过（冲高回落）
-    "late_pulse_change_pct": 3.5,   # 单根脉冲大阳：涨幅≥且几乎无回撤
-    "late_pulse_high_pull_pct": 0.5,# 单根脉冲大阳：距高≤此值（一路拉升）
-    "late_pulse_vol_ratio": 5.0,    # 单根脉冲大阳：量比≥
-    # 交集信号锁存保留时长（分钟）：退出候选池后仍跟踪，避免闪一下消失
-    "intersection_latch_minutes": 15,
-    # 回踩确认规则
-    "pullback_min_pct": 0.5,        # 从触发价回撤下限（%）
-    "pullback_max_pct": 1.5,        # 从触发价回撤上限（%）
-    "pullback_vol_ratio": 0.7,      # 回踩量 < 启动量 * 此比例
-    "pullback_recover_pct": 0.4,    # 重新站回触发价附近（距触发价≤%，即"回踩确认/可试错"）
-    "pullback_vwap_hold": True,     # 回踩不有效跌破VWAP
-    "pullback_flow_5m_positive": True,  # 回踩期间5分钟主力资金仍为正
-    # ── default-v2 增补：连续确认 / 分钟K新鲜度 / 市场环境 ──
-    "pre_confirm_snapshots": 2,       # 准交集需连续通过的独立快照数
-    "retest_confirm_snapshots": 2,    # 回踩确认需连续通过的独立快照数
-    "minute_fresh_seconds": 180,      # 分钟K最大数据年龄（秒），超过不得用于回踩确认
-    "market_breadth_normal": 55.0,    # 宽度≥此值：NORMAL
-    "market_breadth_light": 48.0,     # 宽度≥此值：LIGHT
-    "market_breadth_downgrade": 42.0, # 宽度≥此值：DOWNGRADE；低于：CASH
-    "index_extreme_change_pct": -5.0, # 指数极端跌幅（如创业板≤-5%），环境至少降一级
-    "index_extreme_codes": ["399006"],# 参与极端判定的指数代码（创业板指）
-}
+DEFAULT_INTERSECTION_CONFIG = get_rule_config()["intersection"]
 INTERSECTION_CONFIG_VERSION = "default-v2"
 
 # ── default-v2 状态机相位（英文为规范值，中文仅供展示）──────────────
@@ -1946,17 +1910,21 @@ def apply_flow_increments(enriched: List[Enriched], history: Dict[str, List[Dict
         else:
             e.vol_ratio_vs_hist = float("nan")
 
+        flow_cfg = RULE_CONFIG["screening"]["flow"]
         e.vol_surge = (
             not (isinstance(e.vol_ratio_vs_hist, float) and math.isnan(e.vol_ratio_vs_hist))
-            and e.vol_ratio_vs_hist >= 2.0
+            and e.vol_ratio_vs_hist >= float(flow_cfg["volume_surge_ratio_min"])
             and recent_amt_delta > 0
         )
 
         # ── 主力分笔主动买卖比 (buy_ratio) 生产数据源落地 ──
         if is_number(e.main_net) and e.amount > 0:
-            base_ratio = (100.0 + e.main_pct) / max(1.0, 100.0 - e.main_pct)
+            denominator_floor = float(flow_cfg["buy_ratio_denominator_floor"])
+            surge_cap = float(flow_cfg["buy_ratio_surge_cap"])
+            surge_scale = float(flow_cfg["buy_ratio_surge_scale"])
+            base_ratio = (100.0 + e.main_pct) / max(denominator_floor, 100.0 - e.main_pct)
             if e.super_net > 0 and e.big_net > 0 and is_number(e.flow_5m_inc) and e.flow_5m_inc > 0:
-                surge_factor = min(0.5, (e.flow_5m_inc / e.amount) * 20.0)
+                surge_factor = min(surge_cap, (e.flow_5m_inc / e.amount) * surge_scale)
                 e.buy_ratio = round(base_ratio + surge_factor, 2)
             else:
                 e.buy_ratio = round(base_ratio, 2)
@@ -2052,41 +2020,52 @@ def evaluate_dominance_type(
     buy_ratio = getattr(e, "buy_ratio", None)
     buy_ratio = float(buy_ratio) if (isinstance(buy_ratio, (int, float)) and not math.isnan(buy_ratio)) else None
 
+    dominance_cfg = RULE_CONFIG["dominance"]
+    absolute_cfg = dominance_cfg["absolute"]
+    coalition_cfg = dominance_cfg["coalition"]
+    none_label = dominance_cfg["none_label"]
+
     # 条件 A：绝对主导
-    if super_net > 0 and main_net > 0 and (super_net >= main_net * 0.50):
-        return "absolute", "✓(绝对)"
+    absolute_ratio = float(absolute_cfg["min_super_ratio"])
+    if (
+        super_net > float(absolute_cfg["min_super_net"])
+        and main_net > 0
+        and super_net >= main_net * absolute_ratio
+    ):
+        return "absolute", absolute_cfg["label"]
 
     # 条件 B：合力主导（严格互斥：20% <= super_ratio < 50% 且 严禁缺数据放行）
     super_ratio = (super_net / main_net) if main_net > 0 else 0.0
     is_coalition_amounts = (
-        super_net >= 20_000_000.0 and
-        big_net > 0 and
-        0.20 <= super_ratio < 0.50 and
-        main_net >= 50_000_000.0 and
-        flow_5m >= 10_000_000.0
+        super_net >= float(coalition_cfg["min_super_net"])
+        and big_net > float(coalition_cfg["min_big_net"])
+        and float(coalition_cfg["min_super_ratio"]) <= super_ratio < float(coalition_cfg["max_super_ratio_exclusive"])
+        and main_net >= float(coalition_cfg["min_main_net"])
+        and flow_5m >= float(coalition_cfg["min_flow_5m"])
     )
 
     if is_coalition_amounts:
         # 硬门槛 1: 分笔主买比必须存在且 >= 1.5（严禁 None 放行）
-        if buy_ratio is None or buy_ratio < 1.5:
-            return "none", "✗"
+        if buy_ratio is None or buy_ratio < float(coalition_cfg["min_buy_ratio"]):
+            return "none", none_label
 
         # 硬门槛 2: 必须有连续至少 2 期快照且未衰减（严禁缺历史放行）
         if not flow_history or code not in flow_history:
-            return "none", "✗"
+            return "none", none_label
 
         snaps = flow_history[code]
-        if len(snaps) < 2:
-            return "none", "✗"
+        if len(snaps) < int(coalition_cfg["min_history_snapshots"]):
+            return "none", none_label
 
         prev_main = snaps[-2].get("main_net", 0)
         prev_super = snaps[-2].get("super_net", 0)
-        if main_net < prev_main * 0.9 or super_net < prev_super * 0.9:
-            return "none", "✗"
+        keep_ratio = 1.0 - float(coalition_cfg["max_decay_pct"]) / 100.0
+        if main_net < prev_main * keep_ratio or super_net < prev_super * keep_ratio:
+            return "none", none_label
 
-        return "coalition", "✓(合力)"
+        return "coalition", coalition_cfg["label"]
 
-    return "none", "✗"
+    return "none", none_label
 
 
 def rank_capital_candidates(
@@ -2102,6 +2081,7 @@ def rank_capital_candidates(
     - 赋予 sector_boost 与 B类优选资格 (b_preferred)
     - 板块内归一化排序兼顾 5分钟净额 与 5分钟净额/成交额
     """
+    sector_cfg = RULE_CONFIG["screening"]["sector_boost"]
     # 1. 扫描板块锚点与共振
     sector_anchors: Dict[str, List[Enriched]] = {}
     sector_resonance_counts: Dict[str, int] = {}
@@ -2113,11 +2093,11 @@ def rank_capital_candidates(
             sector_resonance_counts[ind] = sector_resonance_counts.get(ind, 0) + 1
         dom_type, _ = evaluate_dominance_type(e, flow_history)
         is_anchor = (
-            e.amount >= 2_000_000_000.0 and
+            e.amount >= float(sector_cfg["anchor_amount_min"]) and
             e.main_net > 0 and
             dom_type in ("absolute", "coalition") and
             e.price_above_vwap and
-            e.high_pull < 2.0
+            e.high_pull < float(sector_cfg["anchor_high_pullback_max_exclusive"])
         )
         if is_anchor:
             sector_anchors.setdefault(ind, []).append(e)
@@ -2155,13 +2135,23 @@ def rank_capital_candidates(
         has_anchor = anchors_cnt >= 1
         res_cnt = sector_resonance_counts.get(ind, 0)
         non_anchor_res_cnt = max(0, res_cnt - anchors_cnt)
-        sector_active = has_anchor and (res_cnt >= 3 or non_anchor_res_cnt >= 2)
+        sector_active = has_anchor and (
+            res_cnt >= int(sector_cfg["resonance_total_min"])
+            or non_anchor_res_cnt >= int(sector_cfg["non_anchor_resonance_min"])
+        )
 
         risk_status = _row_risk_status(e)
         is_clean = (risk_status == "clean")
 
-        if sector_active and is_clean and e.main_pct > 5.0 and e.price_above_vwap and dom_type in ("absolute", "coalition") and e.high_pull < 2.0:
-            sector_boost = 15.0
+        if (
+            sector_active
+            and is_clean
+            and e.main_pct > float(sector_cfg["stock_main_pct_min_exclusive"])
+            and e.price_above_vwap
+            and dom_type in ("absolute", "coalition")
+            and e.high_pull < float(sector_cfg["anchor_high_pullback_max_exclusive"])
+        ):
+            sector_boost = float(sector_cfg["boost_points"])
             b_preferred = True
 
         score = main_points + super_points + persistence_points + price_points + sector_points + sector_boost
@@ -3187,8 +3177,14 @@ def evaluate_watchlist_breakout_states(
     - avoid 一票否决
     - 超过追高禁区、跌回触发价或 5 分钟转负立即降级重置
     """
+    breakout_cfg = RULE_CONFIG["screening"]["breakout"]
     now_text = now.strftime("%Y-%m-%d %H:%M:%S")
-    is_morning_observe = now.hour == 9 or (now.hour == 10 and now.minute <= 10)
+    now_minutes = now.hour * 60 + now.minute
+    is_morning_observe = (
+        _clock_minutes(str(breakout_cfg["morning_observe_start"]))
+        <= now_minutes
+        < _clock_minutes(str(breakout_cfg["morning_observe_end"]))
+    )
     next_state: Dict[str, Dict[str, Any]] = {}
     evaluated_watchlist: List[Dict[str, Any]] = []
 
@@ -3202,7 +3198,10 @@ def evaluate_watchlist_breakout_states(
                 "trigger": p_item.get("trigger_price", p_item.get("trigger", 0)),
                 "buy_zone": p_item.get("buy_zone", "-"),
                 "invalid": p_item.get("invalid", 0),
-                "no_chase": p_item.get("no_chase", f">{float(p_item.get('trigger_price', 0))*1.025:.2f}不追"),
+                "no_chase": p_item.get(
+                    "no_chase",
+                    f">{float(p_item.get('trigger_price', 0)) * float(breakout_cfg['no_chase_multiplier']):.2f}不追",
+                ),
                 "industry": p_item.get("industry", "-"),
                 "structure": p_item.get("structure", "观察池追踪"),
                 "reason": p_item.get("reason", "昨日观察池延续"),
@@ -3216,7 +3215,11 @@ def evaluate_watchlist_breakout_states(
         trigger_price = float(item.get("trigger", 0))
         no_chase_str = str(item.get("no_chase", ""))
         m_chase = re.search(r">([\d.]+)不追", no_chase_str)
-        no_chase_price = float(m_chase.group(1)) if m_chase else trigger_price * 1.025
+        no_chase_price = (
+            float(m_chase.group(1))
+            if m_chase
+            else trigger_price * float(breakout_cfg["no_chase_multiplier"])
+        )
 
         e = enriched_by_code.get(code)
         prev = (previous_state or {}).get(code) or {}
@@ -3269,12 +3272,17 @@ def evaluate_watchlist_breakout_states(
             status_note = f"5分钟增量转负({flow_5m/10000:.0f}万 < 0)立即降级"
         elif cur_price >= trigger_price:
             # 价格突破触发价且 5分增量 >= 500万
-            if flow_5m >= 5_000_000.0:
+            if flow_5m >= float(breakout_cfg["flow_5m_min"]):
                 if prev_phase in ("TRIGGERED", "CONFIRMED", "B_BREAKOUT", "A_STRICT"):
                     # 连续确认
                     confirm_count += 1
                     # 突破确认门槛：站稳 >= 2 期 + VWAP 上方 + 超单主导 (A或B) + 板块共振
-                    if confirm_count >= 2 and above_vwap and dom_type in ("absolute", "coalition") and res:
+                    if (
+                        confirm_count >= int(breakout_cfg["confirmations_min"])
+                        and above_vwap
+                        and dom_type in ("absolute", "coalition")
+                        and res
+                    ):
                         cur_phase = "CONFIRMED"
                         if is_morning_observe:
                             breakout_class = "CONFIRMED"
@@ -3292,9 +3300,10 @@ def evaluate_watchlist_breakout_states(
                             is_a_strict = (
                                 dom_type == "absolute" and
                                 risk == "clean" and
-                                main_pct >= 5.0 and
-                                high_pull < 1.5 and
-                                buy_ratio is not None and buy_ratio >= 1.5
+                                main_pct >= float(breakout_cfg["a_main_pct_min"]) and
+                                high_pull < float(breakout_cfg["a_high_pullback_max_exclusive"]) and
+                                buy_ratio is not None and
+                                buy_ratio >= float(RULE_CONFIG["dominance"]["coalition"]["min_buy_ratio"])
                             )
                             if is_a_strict:
                                 cur_phase = "A_STRICT"
@@ -3365,6 +3374,7 @@ def evaluate_watchlist_breakout_states(
 
 
 def build_watchlist(items: List[Enriched], stats: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    breakout_cfg = RULE_CONFIG["screening"]["breakout"]
     rows = []
     for e in items:
         if not (5 <= e.price <= 45 and 3_000_000_000 <= e.float_mv <= 25_000_000_000):
@@ -3394,7 +3404,7 @@ def build_watchlist(items: List[Enriched], stats: Dict[str, Dict[str, Any]]) -> 
             "trigger": round(trigger, 2),
             "buy_zone": f"{buy_low:.2f}-{buy_high:.2f}",
             "invalid": round(invalid, 2),
-            "no_chase": f">{trigger * 1.025:.2f}不追",
+            "no_chase": f">{trigger * float(breakout_cfg['no_chase_multiplier']):.2f}不追",
             "reason": f"{e.industry}; 5日{e.five_ret*100:.1f}%; 距60高{e.dist60*100:.1f}%",
         })
     return sorted(rows, key=lambda r: r["score"], reverse=True)[:10]

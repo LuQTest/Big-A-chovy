@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""历史候选诊断脚本（非权威交易裁决，最终以盘中 skill 和选股框架为准）。"""
 import os, glob, re, json
 from tools.report_parser import parse_screening_report
 from tools.query_quote import fetch_realtime_quotes

@@ -1,139 +1,69 @@
 ---
 name: daily-stock-analysis
-description: Analyze current A-share market conditions, screen Shanghai and Shenzhen main-board stocks for ultra-short-term or short-term trend setups, build tradable low-absorption candidate pools with anti-chase filters, build pre-market/intraday watchlists with trigger prices, and produce T+1/T+3 entry zones, stops, targets, position management, and review plans. Use when the user asks for 今日/实时 A股选股、超短线、短线趋势、盘中动能、候选股前十、是否空仓、低风险介入计划、仓位、止损分析、明日观察池、盘前池、触发价、提前埋伏、盘中提醒、低吸候选、可买区间、防追高、尾盘可买池、持仓处理、止盈、复盘, or why they keep missing entries.
+description: 获取并校验 A 股实时行情，运行超短、趋势、低吸和观察池筛选，生成候选报告与原始量化字段。只负责发现层，不承担最终买卖、仓位或持仓裁决。
 ---
 
-# Daily Stock Analysis
+# Daily Stock Analysis · 筛选与报告发现层
 
-Optimize for risk-adjusted decisions, not guaranteed returns. Treat “no trade” as a valid result. Never invent missing market data or loosen a hard filter merely to fill ten rows.
+## 职责边界
 
-## Route the request
+本工具是筛选工具之一，只负责行情获取、指标计算、候选筛选、报告生成和筛选状态保存；**不负责最终买入、卖出、仓位、持仓或真实仓权限裁决**。
 
-Choose exactly one mode:
+权威层级固定为：
 
-1. Use **Tradeable low-absorption** when the user asks for 低吸候选、可买区间、防追高、尾盘可买池, or explicitly says the goal is not highest gainers but stocks still in a tradable buy zone.
-2. Use **Ultra-short** when the user says 超短线, 日内动能, or asks for the specified 5–30 CNY momentum screen without low-absorption/anti-chase constraints.
-3. Use **Short-term trend** when the user says 短线趋势, 趋势主升, or asks for the specified MA5/MA10/MA20 trend screen without low-absorption/anti-chase constraints.
-4. Use **Daily decision** for broader T+1/T+3 analysis, entry planning, position sizing, or whether to stay in cash.
-5. Use **Position management** when the user already bought or holds a stock and asks what to do, when to sell, whether to add, stop, or take profit.
-6. Use **Review mode** for 盘后复盘, reviewing whether a trade followed the plan, or diagnosing chasing/missed-entry mistakes.
-7. If the user explicitly requests both screeners, run them independently and return separate tables. Do not merge thresholds.
-8. Use **Watchlist + trigger** when the user asks why they miss entries, asks for 明日观察池、盘前池、触发价、提前埋伏、盘中提醒, or wants candidates before they satisfy the strict momentum screen.
+1. `盘中` skill：用户实际使用的决策入口和沟通流程；
+2. 根目录 `选股框架.md`：交易规则、参数、否决条件和待验证状态的唯一权威；
+3. `决策记录/YYYYMMDD.md`：实际执行、持仓和 T+1 状态的唯一记录；
+4. 本目录：筛选和数据发现层，输出只作为 `盘中` 的输入。
 
-Read [references/screeners.md](references/screeners.md) before running Tradeable low-absorption, Ultra-short, or Short-term trend. Treat every listed condition as an AND condition. User-supplied thresholds override defaults only for that request.
+如果用户提出买卖、持仓、仓位或复盘问题，本工具只提供带时间戳的筛选证据，并提示由 `盘中` skill 按《选股框架.md》完成裁决。
 
-Read [references/trading-rules.md](references/trading-rules.md) before giving Daily decision, Watchlist + trigger, Position management, Review mode, or any buy/sell/position-size plan. Screening results are only the discovery layer; trading permission must still pass risk and trading layers.
+## 支持的筛选模式
 
-## Bundled query tool
+1. **低吸超短线**：寻找仍在可交易买区、接近 VWAP/支撑且未明显追高的候选；
+2. **低吸短线趋势**：筛选均线结构和趋势条件，输出趋势候选；
+3. **严格超短线**：输出原始短线动能筛选结果；
+4. **严格趋势**：输出原始趋势筛选结果；
+5. **明日观察池**：输出触发价、支撑区、失效位和追高提示，作为观察数据，不代表可买；
+6. **双池交集/状态机**：保存筛选状态和候选变化，状态本身不等于交易许可。
 
-Use `scripts/a_share_daily_screen.py` when the user wants current screening results and can run or paste tool output. The script fetches market snapshots, indices, daily K lines, strict dual-screen results, low-absorption A/B/C pools, a next-day watchlist, and latest-announcement risk labels. It outputs Markdown by default and JSON when requested.
+各模式必须独立运行，不能把不同模式的阈值或结果混合。详细筛选条件见 `references/screeners.md`。
 
-For non-technical Mac users, use `scripts/运行A股筛选.command`. Double-clicking it opens a simple local GUI when Tkinter is available; otherwise it falls back to command-line mode and saves Markdown output to the Desktop.
+## 运行入口
 
-Common commands:
+在项目根目录执行：
 
 ```bash
-python3 scripts/a_share_daily_screen.py --mode all --format md
-python3 scripts/a_share_daily_screen.py --mode low watchlist --format md
-python3 scripts/a_share_daily_screen.py --mode strict low --format json --save /tmp/a_share_screen.json
-python3 scripts/a_share_daily_screen.py --mode all --skip-announcements
+python3 daily-stock-analysis/scripts/a_share_daily_screen.py --mode all --format md
+python3 daily-stock-analysis/scripts/a_share_daily_screen.py --mode low watchlist --format md
+python3 daily-stock-analysis/scripts/a_share_daily_screen.py --mode strict low --format json --save /tmp/a_share_screen.json
+python3 daily-stock-analysis/scripts/a_share_daily_screen.py --mode all --skip-announcements
 ```
 
-`--mode` now accepts multiple values: `strict` (原始双筛), `low` (低吸A/B/C), `watchlist` (明日观察池). Use `all` to include everything.
+普通筛选工具负责生成报告；实时看板负责展示数据。它们都不会自动下单，也不会替代 `盘中` skill 的最终裁决。
 
-When using pasted script output, treat it as the query/discovery layer and still apply [references/trading-rules.md](references/trading-rules.md) before any buy/sell/position-size decision.
+## 数据质量要求
 
-## Acquire and validate data
+- 每次输出必须标注数据时间、交易状态和数据源；
+- 行情、K 线、公告、均价线或资金字段缺失时，明确标记“无法验证/数据不足”，不得自行补值；
+- 使用统一单位：成交额和资金流向必须注明元、万元或亿元；
+- 报告解析按表头动态定位，不能硬编码列号；
+- 空结果先检查报告完整性、字段列位和网络状态，不能直接解释为“没有候选”；
+- `A/B/C`、`strict/hopeful`、`buy zone` 等都是筛选层标签，不是买卖权限；
+- `avoid`、`unknown`、`watch_risk` 只作为筛选结果中的风险字段呈现，最终含义由 `盘中` 和《选股框架.md》裁决。
 
-1. Fetch current data with live browsing, a market-data API, or another available real-time source whenever the request says 当前、今日、实时、盘中, or equivalent. Do not rely on model memory.
-2. Record the market-data timestamp, trading status, and source. Prefer one internally consistent source; if combining sources, align timestamps and adjustment conventions.
-3. Use unadjusted live quotes for current price, high, change, turnover, amount, and volume ratio. Use a consistent adjusted historical series for moving averages, cumulative returns, and 60-day highs.
-4. Interpret `亿元` as CNY 100 million and confirm source units before filtering.
-5. If the market is closed, clearly label the latest completed session rather than calling it real-time. If essential fields are unavailable or stale, state that screening cannot be verified; do not estimate values.
-6. Return all qualifying stocks when fewer than ten pass. State “仅 N 只满足全部条件”; never add near-matches.
+## 输出约定
 
-## Apply the probability gate
+报告可以输出以下原始字段：代码、名称、价格、涨跌幅、成交额、换手率、量比、行业、均线、VWAP、日内高位回落、主力净额、超大单、大单、5 分钟增量、公告风险、板块共振和状态机状态。
 
-For any actual entry, exit, position, or review decision, apply [references/trading-rules.md](references/trading-rules.md). Before recommending an actual entry in Daily decision mode, require all four layers:
+输出“低吸候选”“观察”“追高风险”时，只描述筛选结果和卡点；不输出最终买入、卖出、真实仓开仓、仓位比例或 T+1 执行指令。
 
-1. **Market**: breadth is neutral or positive, index risk is not clearly bearish, and enough strict candidates exist.
-2. **Sector**: the candidate belongs to an active industry/theme with corroborating peer strength, not an isolated spike.
-3. **Stock**: trend, extension, upper-shadow, and volume quality are acceptable.
-4. **Entry**: the buy zone is near support or MA5 and has a nearby invalidation level.
+影子验证数据由 `tools/shadow_tracker.py` 统一维护。本工具不修改影子结算结果，也不把未完成样本转成交易结论。
 
-If any layer fails, output **cash**, **observe**, **low_absorb_only**, or **avoid** as appropriate; Chinese-facing output may render these as 空仓、观察、只可低吸、回避. If market data is incomplete, lower the stance by at least one level.
+## 明确禁止
 
-## Avoid late entries
-
-Before recommending an entry, check whether the candidate is already past the proper entry.
-
-Mark as **错过/等待回踩** when any of these are true:
-
-- Current price is more than 3% above MA5 or the planned support zone.
-- Current-to-high gap is small but the stock has already made a sharp intraday move.
-- Turnover is unusually high and the stock is no longer near a controllable invalidation level.
-- The stop distance from current price is wider than the expected first target.
-
-Do not convert a strong stock into an actionable buy if the buy point has passed.
-
-## Build a watchlist before confirmation
-
-Use Watchlist + trigger mode to find stocks before they enter the strict Ultra-short or Short-term trend screens.
-
-1. The goal is not to recommend immediate buying. The goal is to create a watchlist with trigger prices, support zones, invalidation levels, and what to wait for intraday.
-2. Prefer stocks that are close to a breakout or pullback confirmation, not stocks already extended.
-3. Use relaxed pre-trigger filters:
-   - Code starts with `60` or `00`; exclude ST/*ST and suspended stocks.
-   - Current price: 5-45 CNY.
-   - Float market cap: CNY 3-25 billion preferred.
-   - Price is above MA10 or within 3% below MA10.
-   - MA20 is flat or rising preferred.
-   - Five-session cumulative return no more than 12% preferred.
-   - Distance to 60-session high no more than 15% preferred.
-   - Prior day or current turnover above 2% preferred.
-   - Sector has at least two peers showing strength or improving structure.
-4. For each watchlist stock, provide:
-   - trigger price: break above prior high / intraday platform / MA5 reclaim
-   - buy zone: pullback area only
-   - invalidation: nearby support or MA10/MA20 break
-   - chase ban: price above trigger by more than 2%-3% is no longer a buy
-5. If the stock already satisfies strict Ultra-short conditions but is far above buy zone, mark it as **错过/等待回踩**, not actionable.
-
-## Build a Daily decision plan
-
-1. Set the stance:
-   - **空仓**: weak breadth, insufficient candidates, excessive extension, missing data, or poor reward/risk.
-   - **轻仓试错**: several candidates pass and breadth is neutral or better, but pullback or confirmation is still required.
-   - **允许介入**: market, sector, stock, and entry all align; never imply full-position entry.
-2. Prefer main-board `60*` and `00*` stocks unless the user specifies another universe. Exclude ST/*ST, suspended stocks, inaccessible limit-up stocks, and obvious long-upper-shadow setups.
-3. Evaluate live price, change, turnover, amount, volume ratio, float market cap, industry; MA5/MA10/MA20, MA20 slope, five-session return, distance to 60-session high; current-to-high distance, volume quality, breadth, and sector confirmation.
-4. For T+1, prefer a pullback to MA5/support and avoid chasing gaps or sharp intraday surges. For T+3, require aligned MA5/MA10/MA20, rising MA20, and limited extension from the base.
-5. Give every actionable idea a buy zone, invalidation/stop, target area, abandon conditions, holding horizon, and maximum position.
-6. Default to 0% exposure without a clear edge, 10%–20% per trial idea, and no full position even in a strong setup unless the user explicitly accepts higher risk.
-
-## Present results
-
-For exact screeners, follow the columns and sort order in [references/screeners.md](references/screeners.md). For low-absorption screeners, sort by current tradability/buy-space first, not by gain descending. Keep the response compact and place one line above the table with data timestamp, trading status, and source.
-
-For Daily decision mode, return:
-
-1. 市场立场：cash / observe / low_absorb_only / trial_entry_allowed / avoid.
-2. Two to four data-backed reasons.
-3. Candidate table with code, name, price, change, turnover, amount, volume ratio, industry, and score.
-4. Entry-plan table with decision, candidate layer, buy zone, no-chase zone, stop/invalidation, target, R/R, T+1/T+3 view, abandon conditions, and max position.
-5. A brief risk note. State explicitly that screening is not a profit guarantee or personalized investment advice when the user asks for certainty.
-
-For intraday low-absorption advice that uses repeated scan history, explicitly classify each idea as **标准买入**, **提前试仓**, **观察持有**, or **取消** according to [references/trading-rules.md](references/trading-rules.md). If using 提前试仓, state “小仓试错，不是确认买点” and cap the CNY 150,000-account reference size at CNY 3,000-5,000.
-
-For Watchlist + trigger mode, return:
-
-1. 明日/盘中观察池 stance: observe / wait_trigger / avoid.
-2. Watchlist table with code, name, price, industry, structure, trigger price, buy zone, invalidation, chase ban, and reason.
-3. Separate **already missed** list for strong stocks that passed strict screens but are no longer near a valid entry.
-4. A short execution rule: only act when trigger, time-window, repeated-screen, market, and sector confirmation happen together.
-
-For Position management mode, return current holding, cost, quantity, current state, decision, strength line, warning line, hard stop, take-profit zone, next-day T+1 plan, whether adding is allowed, and whether opening a new stock is allowed.
-
-For Review mode, return trade result, whether it followed the original plan, buy-point quality, position sizing, whether it chased, whether it violated the time window, whether repeated-screen confirmation was present, ignored risks, and the next rule correction.
-
-Use direct language: “等待”, “只可低吸”, “不追高”, and “跌破 X 则失效”. Do not claim that any stock must rise or will guarantee profit.
+- 不把筛选入榜直接写成“可以买”；
+- 不绕过《选股框架.md》的超大单、公告、VWAP、板块和待验证权限门槛；
+- 不读取或推断当前持仓来替代 `决策记录`；
+- 不因用户希望交易而放宽筛选条件；
+- 不在本工具内新建另一套交易规则。

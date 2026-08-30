@@ -4,6 +4,8 @@
 
 它负责查询行情、计算筛选条件、生成报告和维护观察状态；**不会自动下单**。筛选结果只是发现候选，买卖、仓位和止损仍应按照项目规则人工确认。
 
+职责边界：`daily-stock-analysis` 仅是筛选与报告发现工具，不承担最终买卖、仓位或持仓裁决。最终决策入口是 `盘中` skill，交易规则以根目录 `选股框架.md` 为准，实际持仓以 `决策记录/` 为准。
+
 ## 一、快速开始
 
 ### 环境要求
@@ -158,6 +160,9 @@ python3 tools/shadow_tracker.py --date 20260824
 
 # 只查看当前进度
 python3 tools/shadow_tracker.py --report
+
+# 只读检查框架、代码、影子库和权限门槛是否一致
+python3 tools/validate_consistency.py
 
 # 识别并记录龙头分歧候选；仅写入影子样本
 python3 tools/detect_divergence_leader.py --date 20260824 --record

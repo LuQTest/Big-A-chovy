@@ -1,6 +1,8 @@
-# Exact screening specifications
+# Exact screening specifications (discovery layer)
 
 > ⚠️ **权威声明**：本文件与 `references/trading-rules.md` 为 `daily-stock-analysis` 脚本内部的量化初筛与发现层规则。最终交易裁决、资金仲裁、超大单否决、回落分档锁定与仓位控制以根目录《选股框架.md》与《CLAUDE.md》为最高权威。若本文件规则与《选股框架.md》存在冲突，**一律以《选股框架.md》为准**。
+>
+> 本文件只生成候选和风险标签。`A/B/C`、`strict/hopeful`、`buy zone` 等词均是筛选层描述，不代表可以买入、卖出、持仓或仓位许可；最终裁决由 `盘中` skill 按《选股框架.md》完成。
 
 Use these specifications only after obtaining current, timestamped market data. Apply all conditions before sorting. Unless the user changes a threshold, boundary words are literal: “大于” and “小于” are strict; “在 A 至 B 之间” and “不超过” include their endpoints.
 
@@ -17,7 +19,7 @@ Use these specifications only after obtaining current, timestamped market data. 
 - **First appeared after HH:MM**: only assert this when running a monitor with prior snapshots. In a single scan after the time threshold, treat qualifying high-gain names as tail-session risk if they otherwise meet that risk rule; do not invent first-appearance history.
 - **Sector resonance**: yes only when at least two stocks in the same provider industry/sector are simultaneously strong under comparable gain/turnover/amount conditions. Otherwise report no or unverified.
 
-## Tradeable low-absorption ultra-short (低吸超短线)
+## Low-absorption candidate discovery (低吸超短线)
 
 Use this when the user asks for ultra-short candidates that are still in a tradable low-absorption zone instead of the highest gainers. Filter the full A-share universe with all hard conditions before classification:
 
@@ -51,9 +53,9 @@ Return these columns:
 | 类别 | 代码 | 名称 | 涨幅 | 换手率 | 成交额 | 量比 | 板块 | 板块共振 | 日内高点回落 | 分时均价线状态 | 风险标签 |
 |---|---|---|---:|---:|---:|---:|---|---|---:|---|---|
 
-After 14:20, only stocks satisfying all of these may enter a tail-session buy pool: sector resonance = yes, above VWAP or verified VWAP pullback hold, intraday high pullback <= 1.5 percentage points, turnover <= 7%, and live change <= 4.8%. Otherwise place them in next-day observation.
+After 14:20, only stocks satisfying all of these may receive a tail-session candidate tag: sector resonance = yes, above VWAP or verified VWAP pullback hold, intraday high pullback <= 1.5 percentage points, turnover <= 7%, and live change <= 4.8%. This file does not grant a buy permission; otherwise place them in next-day observation.
 
-## Tradeable low-absorption short-term trend (低吸短线趋势)
+## Low-absorption trend candidate discovery (低吸短线趋势)
 
 Use this when the user asks for T+1/T+3 trend candidates that still have buy-space and should not chase already accelerated stocks. Filter the full A-share universe with all hard conditions before classification:
 
@@ -88,7 +90,7 @@ Return these columns:
 | 类别 | 代码 | 名称 | 涨幅 | 换手率 | 成交额 | 板块 | 均线状态 | 近5日涨幅 | 距20日均线 | 日内高点回落 | 风险标签 |
 |---|---|---|---:|---:|---:|---|---|---:|---:|---:|---|
 
-After 14:20, only stocks satisfying all of these may enter a tail-session buy pool: sector resonance = yes, above VWAP or verified VWAP pullback hold, intraday high pullback <= 1.5 percentage points, turnover <= 7%, and live change <= 4.8%. Otherwise place them in next-day observation.
+After 14:20, only stocks satisfying all of these may receive a tail-session candidate tag: sector resonance = yes, above VWAP or verified VWAP pullback hold, intraday high pullback <= 1.5 percentage points, turnover <= 7%, and live change <= 4.8%. This file does not grant a buy permission; otherwise place them in next-day observation.
 
 ## Ultra-short (超短线)
 
