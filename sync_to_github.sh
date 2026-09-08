@@ -3,7 +3,8 @@
 # 由 LaunchAgent com.luqiang.syncstock 每 5 分钟触发一次
 # 无变更时零操作退出；有变更才 commit + push
 
-REPO="/Users/luqiang/Documents/Others/股票"
+# 仓库根目录 = 本脚本所在目录，不再写死个人路径
+REPO="$(cd "$(dirname "$0")" && pwd)"
 LOG="$HOME/Library/Logs/sync_to_github.log"
 
 cd "$REPO" || exit 1

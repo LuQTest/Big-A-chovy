@@ -20,7 +20,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SCREEN_SCRIPT = SCRIPT_DIR / "a_share_daily_screen.py"
 HOLDINGS_FILE = SCRIPT_DIR / "holdings.json"
 SETTINGS_FILE = SCRIPT_DIR / "gui_settings.json"
-OUTPUT_DIR = Path("/Users/luqiang/Documents/Others/股票/筛选结果")
+OUTPUT_DIR = SCRIPT_DIR.parent.parent / "筛选结果"
 
 
 def default_output_path() -> Path:

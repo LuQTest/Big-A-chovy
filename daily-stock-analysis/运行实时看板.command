@@ -4,9 +4,12 @@
 
 cd "$(dirname "$0")"
 
-PYTHON="/Users/luqiang/.workbuddy/binaries/python/versions/3.13.12/bin/python3"
-if [ ! -f "$PYTHON" ]; then
-    PYTHON="$(which python3)"
+# 优先使用 PATH 中的 python3（README 要求 Python 3.10+）
+PYTHON="$(command -v python3)"
+if [ -z "$PYTHON" ]; then
+    echo "未找到 python3，请先安装 Python 3.10 或更高版本"
+    read -p "按回车退出..."
+    exit 1
 fi
 
 # 东财数据必须走代理(直连被封)。这里只检测并打印系统代理，**不固化到环境变量**，

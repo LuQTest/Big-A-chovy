@@ -198,7 +198,7 @@ SCREENING_TIMEOUT = 120
 # 代理断开时，用更短的轮询间隔探测恢复（正常刷新间隔是 settings["interval"]=90s）。
 # 你一旦把代理弄通，看板约 20s 内自动恢复，不用干等一整轮。
 PROXY_RECOVERY_INTERVAL = 15
-MD_OUTPUT_DIR = Path("/Users/luqiang/Documents/Others/股票/筛选结果")
+MD_OUTPUT_DIR = SCRIPT_DIR.parent.parent / "筛选结果"
 # 持久化最近一次「有效完整」结果，供非交易时段保留快照 / 跨重启恢复
 LAST_VALID_RESULT_PATH = SCRIPT_DIR / "last_valid_result.json"
 
