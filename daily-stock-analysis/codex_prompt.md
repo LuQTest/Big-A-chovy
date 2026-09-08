@@ -41,7 +41,7 @@ curl -s http://localhost:8765/api/md
 
 ## 数据源 2：MD 文件（看变化趋势）
 
-文件位置：`/Users/luqiang/Documents/Others/股票/筛选结果/`
+文件位置：项目根目录下的 `筛选结果/`
 
 ### 文件命名规则
 - 盘中：`A股筛选结果_YYYYMMDD_HHMM.md`（平铺在根目录）
@@ -50,7 +50,7 @@ curl -s http://localhost:8765/api/md
 ### 如何对比资金变化
 1. 列出最近几个文件：
 ```bash
-ls -t /Users/luqiang/Documents/Others/股票/筛选结果/A股筛选结果_*.md | head -5
+ls -t 筛选结果/A股筛选结果_*.md | head -5
 ```
 
 2. 读取最近 3~5 个文件，对比同一只股票的资金字段变化：

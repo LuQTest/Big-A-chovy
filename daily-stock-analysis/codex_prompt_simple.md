@@ -13,7 +13,7 @@ curl -s http://localhost:8765/api/data
 
 **看资金变化趋势：** 读最近 3-5 个 MD 文件对比同一只股票的主力净额变化。
 ```bash
-ls -t /Users/luqiang/Documents/Others/股票/筛选结果/A股筛选结果_*.md | head -5
+ls -t 筛选结果/A股筛选结果_*.md | head -5
 ```
 
 如果 curl 失败，服务器没开，告诉大强运行 `运行实时看板.command`。

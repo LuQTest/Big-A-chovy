@@ -31,3 +31,7 @@ daily-stock-analysis/scripts/holdings.json
 daily-stock-analysis/scripts/gui_settings.json
 daily-stock-analysis/scripts/.em_nontrading_refresh
 tools/shadow_data/shadow_samples.json
+
+# 本地个人运行数据（报告 / 决策记录 / 持仓），不应上传 GitHub
+筛选结果/
+决策记录/
