@@ -31,3 +31,7 @@ daily-stock-analysis/scripts/holdings.json
 daily-stock-analysis/scripts/gui_settings.json
 daily-stock-analysis/scripts/.em_nontrading_refresh
 tools/shadow_data/shadow_samples.json
+
+# Personal reports & decision logs (see README section 4: never upload)
+筛选结果/
+决策记录/

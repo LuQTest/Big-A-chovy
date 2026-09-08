@@ -198,7 +198,12 @@ SCREENING_TIMEOUT = 120
 # 代理断开时，用更短的轮询间隔探测恢复（正常刷新间隔是 settings["interval"]=90s）。
 # 你一旦把代理弄通，看板约 20s 内自动恢复，不用干等一整轮。
 PROXY_RECOVERY_INTERVAL = 15
-MD_OUTPUT_DIR = Path("/Users/luqiang/Documents/Others/股票/筛选结果")
+# 输出目录基于项目根目录解析，可通过环境变量 BIG_A_CHOVY_OUTPUT_DIR 覆盖。
+# 与 a_share_screen_gui.py 保持同一环境变量，避免两处输出落到不同位置。
+MD_OUTPUT_DIR = Path(
+    os.environ.get("BIG_A_CHOVY_OUTPUT_DIR")
+    or (SCRIPT_DIR.parent.parent / "筛选结果")
+).expanduser()
 # 持久化最近一次「有效完整」结果，供非交易时段保留快照 / 跨重启恢复
 LAST_VALID_RESULT_PATH = SCRIPT_DIR / "last_valid_result.json"
 
