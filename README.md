@@ -286,8 +286,8 @@ python3 -m unittest discover -s daily-stock-analysis/scripts -p 'test_*.py'
 
 以下问题已知存在，后续需要通过 Agent 修改代码或启动配置解决：
 
-1. **筛选结果保存路径**：部分 GUI 和实时看板代码仍使用本机固定路径。后续应改为基于项目根目录的相对路径，或提供可配置的输出目录，方便其他使用者直接运行。
-2. **网络代理依赖 Clash Verge**：当前运行环境需要通过 Clash Verge 的系统代理访问行情接口，直连行情服务会被封锁。使用实时筛选或看板前，应确认 Clash Verge 已启动并开启系统代理；命令行可使用 `--network-mode proxy`。
+1. **筛选结果保存路径（已在本 PR 修复）**：部分 GUI 和实时看板代码曾使用本机固定路径（`/Users/luqiang/...`），其他使用者克隆后会因无权限创建目录导致保存报告失败。现改为基于项目根目录动态推导（`项目根/筛选结果`），并支持通过环境变量 `BIG_A_CHOVY_OUTPUT_DIR` 覆盖输出目录。
+2. **部分网络环境需要系统代理**：作者的开发环境中需通过 Clash Verge 的系统代理访问行情接口。该限制与具体网络环境有关，并非普遍情况：已实测国内部分网络下 `--network-mode direct` 可直连行情接口正常筛选（全市场扫描约 20 秒完成）。建议遇到连接问题时先尝试 `--network-mode direct`，不通再开启系统代理使用 `--network-mode proxy`。
 
 ## 十、内置 Skill
 

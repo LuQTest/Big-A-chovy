@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import subprocess
@@ -17,10 +18,15 @@ from a_share_daily_screen import build_url_opener, NETWORK_MODE
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent
 SCREEN_SCRIPT = SCRIPT_DIR / "a_share_daily_screen.py"
 HOLDINGS_FILE = SCRIPT_DIR / "holdings.json"
 SETTINGS_FILE = SCRIPT_DIR / "gui_settings.json"
-OUTPUT_DIR = Path("/Users/luqiang/Documents/Others/股票/筛选结果")
+# 输出目录基于项目根目录解析，可通过环境变量 BIG_A_CHOVY_OUTPUT_DIR 覆盖。
+OUTPUT_DIR = Path(
+    os.environ.get("BIG_A_CHOVY_OUTPUT_DIR")
+    or (PROJECT_ROOT / "筛选结果")
+).expanduser()
 
 
 def default_output_path() -> Path:
