@@ -23,6 +23,8 @@ daily-stock-analysis/scripts/flow_snapshot.json
 daily-stock-analysis/scripts/.announcement_risk_cache.json
 daily-stock-analysis/scripts/watchlist_breakout_state.json
 daily-stock-analysis/.rollback-backup-*/
+daily-stock-analysis/scripts/keep_proxy_alive.sh.bak.*
+*.log
 
 # Runtime state & data (generated at runtime, not framework source)
 daily-stock-analysis/scripts/last_valid_result.json
@@ -31,3 +33,7 @@ daily-stock-analysis/scripts/holdings.json
 daily-stock-analysis/scripts/gui_settings.json
 daily-stock-analysis/scripts/.em_nontrading_refresh
 tools/shadow_data/shadow_samples.json
+
+# Local reports and decision records may contain personal trading data
+筛选结果/
+决策记录/

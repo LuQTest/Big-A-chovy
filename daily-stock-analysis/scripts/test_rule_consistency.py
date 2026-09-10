@@ -10,9 +10,10 @@ for path in (PROJECT_ROOT, PROJECT_ROOT / "tools"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from rule_config import is_complete_shadow_result, shadow_targets  # noqa: E402
+from rule_config import RULE_CONFIG, hhmm_to_minutes, is_complete_shadow_result, shadow_targets  # noqa: E402
 from validate_consistency import (  # noqa: E402
     check_config,
+    check_framework_progress,
     check_shadow_database,
     validate_workspace,
 )
@@ -23,6 +24,28 @@ class RuleConsistencyTests(unittest.TestCase):
         result = check_config()
         self.assertFalse(result["fail"])
         self.assertEqual(len(shadow_targets()), 4)
+
+    def test_shared_config_registers_execution_and_risk_policy(self):
+        execution = RULE_CONFIG["execution"]
+        self.assertIn("observe_only", execution["time_windows"])
+        self.assertIn("fallback_window", execution)
+        t1_window = execution["t1_exit_window"]
+        self.assertLessEqual(
+            hhmm_to_minutes(t1_window["start"]),
+            hhmm_to_minutes(t1_window["target"]),
+        )
+        self.assertLessEqual(
+            hhmm_to_minutes(t1_window["target"]),
+            hhmm_to_minutes(t1_window["end"]),
+        )
+
+        risk = RULE_CONFIG["risk"]
+        self.assertEqual(
+            set(risk["statuses"]),
+            {"clean", "watch_risk", "avoid", "unknown"},
+        )
+        self.assertTrue(risk["announcement"]["hard_keywords"])
+        self.assertIn("600664", risk["hard_blacklist"])
 
     def test_complete_shadow_result_requires_daily_kline_and_all_metrics(self):
         incomplete = {
@@ -62,6 +85,20 @@ class RuleConsistencyTests(unittest.TestCase):
             self.assertTrue(result["fail"])
             self.assertIn("checked=true", result["fail"][0]["message"])
 
+    def test_progress_uses_completed_results_not_collected_signals(self):
+        db = {"targets": shadow_targets(), "samples": {key: [] for key in shadow_targets()}}
+        db["samples"]["coalition"] = [{"t1_result": None} for _ in range(4)]
+        text = (PROJECT_ROOT / "选股框架.md").read_text()
+        # 用实际文档结构构造4条未结算信号，正确完成数为0。
+        db["samples"]["divergence"] = [{"t1_result": None} for _ in range(4)]
+        text = text.replace("已采集4；完整结算1/20", "已采集4；完整结算0/20")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "选股框架.md").write_text(text)
+            self.assertFalse(check_framework_progress(root, db)["fail"])
+            (root / "选股框架.md").write_text(text.replace("已采集4；完整结算0/20", "已采集4；完整结算4/20"))
+            self.assertTrue(check_framework_progress(root, db)["fail"])
+
     def test_current_workspace_has_no_consistency_failures(self):
         result = validate_workspace(PROJECT_ROOT)
         self.assertFalse(result["fail"], result["fail"])
@@ -69,4 +106,3 @@ class RuleConsistencyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

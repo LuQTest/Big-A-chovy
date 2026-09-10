@@ -17,35 +17,32 @@ PROJECT_ROOT = os.path.dirname(TOOLS_DIR)
 sys.path.insert(0, TOOLS_DIR)
 sys.path.insert(0, PROJECT_ROOT)
 from report_parser import parse_screening_report, get_report_files
-from tools.rule_config import RULE_CONFIG
+from tools.rule_config import RULE_CONFIG, normalize_hhmm
 
 BASE_REPORTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "筛选结果"))
-
-# 时间窗口交易权限映射（来源：trading-rules.md）
-TIME_WINDOWS = {
-    "observe_only":     ("0930", "1010", "观察期·禁买"),
-    "pending_confirm":  ("1010", "1020", "等待确认"),
-    "primary_window":   ("1020", "1045", "第一买点窗口"),
-    "morning_confirm":  ("1045", "1130", "早盘确认期"),
-    "lunch_break":      ("1130", "1300", "午休"),
-    "afternoon_reflux": ("1300", "1345", "午后回流·仓位减半"),
-    "afternoon_late":   ("1345", "1420", "午后尾段"),
-    "tail_risk":        ("1420", "1440", "尾盘风控·禁新仓"),
-    "market_close":     ("1440", "1515", "收盘·仅持仓管理"),
-}
+RISK_STATUSES = RULE_CONFIG["risk"]["statuses"]
+RISK_AVOID = RISK_STATUSES["avoid"]
+RISK_UNKNOWN = RISK_STATUSES["unknown"]
 
 def get_time_permission(time_str: str) -> tuple:
     """
     根据报告时间返回交易权限标签。
     返回: (permission_key, display_label)
     """
-    t = time_str.replace(":", "")
-    for key, (start, end, label) in TIME_WINDOWS.items():
+    t = normalize_hhmm(time_str)
+    execution_cfg = RULE_CONFIG["execution"]
+    for key, window in execution_cfg["time_windows"].items():
+        start = normalize_hhmm(window["start"])
+        end = normalize_hhmm(window["end"])
+        label = str(window["label"])
         if start <= t < end:
             return (key, label)
-    if t < "0930":
-        return ("pre_market", "盘前")
-    return ("market_close", "收盘·仅持仓管理")
+    pre_market = execution_cfg["pre_market"]
+    if t < normalize_hhmm(pre_market["start"]):
+        return (str(pre_market["key"]), str(pre_market["label"]))
+    fallback_key = str(execution_cfg["fallback_window"])
+    fallback_window = execution_cfg["time_windows"].get(fallback_key) or {}
+    return (fallback_key, str(fallback_window.get("label") or ""))
 
 def parse_amount(val_str: str) -> float:
     """将 '+1234万', '-5.6亿', '+0' 等字符串转换为以万元为单位的浮点数"""
@@ -81,7 +78,7 @@ def evaluate_low_absorb_candidate(row: Dict[str, str], is_morning_a: bool = Fals
                                    locked_pullback: Optional[float] = None) -> Dict[str, Any]:
     """
     根据《选股框架.md》评估低吸候选标的是否满足 5/5 规则：
-    1. 公告风控: clean (avoid 一票否决, watch_risk 仅减分)
+    1. 公告风控: 非 avoid/unknown（avoid/unknown 一票否决, clean 优先, watch_risk 仅减分）
     2. 主力净占比: >5% (分档: 回落<1%→>5%, 回落<2%→>10%, 回落<3%→>15%)
     3. 5分钟增量: >100万 (早盘A类 >500万)
     4. 高位回落: <1% (或符合主力分档)
@@ -112,15 +109,15 @@ def evaluate_low_absorb_candidate(row: Dict[str, str], is_morning_a: bool = Fals
     inc5_wan = parse_amount(row.get("5分钟增量", "0"))
     super_order_str = row.get("超大单", "0")
     super_lead_str = row.get("超单主导", "")
-    announcement = row.get("公告风险", "clean")
+    announcement = row.get("公告风险", RISK_UNKNOWN)
     low_cfg = RULE_CONFIG["screening"]["low_absorb"]
 
     checks = {}
     fails = []
     passes = 0
 
-    # 1. 公告检查 (avoid 一票否决)
-    if "avoid" in announcement:
+    # 1. 公告检查 (avoid/unknown 一票否决, watch_risk 仅减分)
+    if RISK_AVOID in announcement or RISK_UNKNOWN in announcement:
         checks["announcement"] = False
         fails.append(f"公告硬否决({announcement})")
     else:
@@ -205,7 +202,8 @@ def evaluate_low_absorb_candidate(row: Dict[str, str], is_morning_a: bool = Fals
     above_vwap = "上方" in vwap
 
     score = passes  # 满分 5
-    is_5_of_5 = (score == 5) and ("avoid" not in announcement) and (checks.get("super_lead", False))
+    is_5_of_5 = (score == 5) and (RISK_AVOID not in announcement) and (RISK_UNKNOWN not in announcement) \
+        and (checks.get("super_lead", False))
 
     return {
         "code": code,
@@ -277,7 +275,8 @@ def scan_single_file(filepath: str, pullback_locks: Optional[Dict[str, Dict]] = 
             ev["state_machine"] = None
 
     passed_5 = [e for e in evaluated if e["is_5_of_5"]]
-    near_4 = [e for e in evaluated if e["score"] == 4 and "avoid" not in e["announcement"]]
+    near_4 = [e for e in evaluated if e["score"] == 4 and RISK_AVOID not in e["announcement"]
+              and RISK_UNKNOWN not in e["announcement"]]
 
     # 时间窗口交易权限
     perm_key, perm_label = get_time_permission(rep["time"])

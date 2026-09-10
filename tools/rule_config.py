@@ -18,11 +18,62 @@ from typing import Any, Dict
 
 
 RULE_CONFIG: Dict[str, Any] = {
-    "version": "20260827-v1",
+    "version": "20260908-v1",
     "authority": {
         "framework": "选股框架.md",
         "decision_records_dir": "决策记录",
         "screening_skill": "盘中",
+    },
+    "execution": {
+        # 这些时段是诊断报告的阶段映射，具体买卖裁决仍以选股框架和
+        # 盘中 skill 为准；集中登记是为了避免各工具各自漂移。
+        "time_windows": {
+            "observe_only": {"start": "09:30", "end": "09:40", "label": "观察期·禁买"},
+            "pending_confirm": {"start": "09:40", "end": "09:50", "label": "等待确认"},
+            "primary_window": {"start": "09:50", "end": "10:45", "label": "第一买点窗口"},
+            "morning_confirm": {"start": "10:45", "end": "11:30", "label": "早盘确认期"},
+            "lunch_break": {"start": "11:30", "end": "13:00", "label": "午休"},
+            "afternoon_reflux": {"start": "13:00", "end": "13:45", "label": "午后回流·仓位减半"},
+            "afternoon_late": {"start": "13:45", "end": "14:20", "label": "午后尾段"},
+            "tail_risk": {"start": "14:20", "end": "14:40", "label": "尾盘风控·禁新仓"},
+            "market_close": {"start": "14:40", "end": "15:15", "label": "收盘·仅持仓管理"},
+        },
+        "pre_market": {"key": "pre_market", "start": "09:30", "label": "盘前"},
+        "fallback_window": "market_close",
+        "t1_exit_window": {"start": "09:30", "end": "09:45", "target": "09:45"},
+    },
+    "risk": {
+        "statuses": {
+            "clean": "clean",
+            "watch_risk": "watch_risk",
+            "avoid": "avoid",
+            "unknown": "unknown",
+        },
+        "hard_blacklist": {
+            "600664": "20260728-框架教训：哈药股份暴涨后高位派发+追高→死亡螺旋，绝不补仓/不做低吸",
+        },
+        "low_absorb_exclusion": {
+            "five_day_return_min_ratio": 0.12,
+            "main_pct_max_inclusive": 0.0,
+            "history_lookback_snapshots": 6,
+            "negative_main_snapshots_min": 3,
+        },
+        "announcement": {
+            "hard_keywords": [
+                "减持", "被动减持", "清仓式减持", "监管函", "问询函", "关注函", "警示函",
+                "立案", "调查", "行政处罚", "纪律处分", "公开谴责", "退市风险", "其他风险警示",
+                "业绩预亏", "业绩亏损", "业绩预损", "业绩下修", "业绩修正", "大幅下降", "计提减值", "商誉减值",
+                "限售股上市流通", "解除限售", "解禁", "股份冻结", "司法冻结", "诉讼", "仲裁",
+                "债务逾期", "担保逾期", "资金占用", "无法表示意见", "保留意见", "停牌核查",
+            ],
+            "watch_keywords": [
+                "质押", "担保", "关联交易", "业绩快报", "业绩预告", "更正公告", "补充公告",
+                "高管辞职", "董事辞职", "会计政策变更", "审计机构", "股东大会延期",
+            ],
+            "ignore_keywords": [
+                "权益分派", "分红", "法律意见书", "独立意见", "任职资格核准", "股东大会决议",
+            ],
+        },
     },
     "dominance": {
         "absolute": {
@@ -38,7 +89,7 @@ RULE_CONFIG: Dict[str, Any] = {
             "min_main_net": 50_000_000.0,
             "min_flow_5m": 10_000_000.0,
             "min_history_snapshots": 2,
-            "max_decay_pct": 10.0,
+            "max_decay_pct": 0.0,
             "min_buy_ratio": 1.5,
             "label": "✓(合力)",
         },
@@ -59,7 +110,7 @@ RULE_CONFIG: Dict[str, Any] = {
         },
         "breakout": {
             "morning_observe_start": "09:30",
-            "morning_observe_end": "10:10",
+            "morning_observe_end": "09:40",
             "flow_5m_min": 5_000_000.0,
             "confirmations_min": 2,
             "no_chase_multiplier": 1.025,
@@ -127,7 +178,6 @@ RULE_CONFIG: Dict[str, Any] = {
     },
     "shadow": {
         "target_samples": 20,
-        "t1_target_minute": 585,
         "false_breakout_stop_pct": 1.5,
         "required_complete_source": "daily_kline",
         "categories": {
@@ -147,6 +197,25 @@ RULE_CONFIG: Dict[str, Any] = {
         ],
     },
 }
+
+
+def normalize_hhmm(value: Any) -> str:
+    """将 09:45、0945、945 统一为四位 HHMM，并校验时刻格式。"""
+    text = str(value).strip().replace(":", "")
+    if len(text) == 3:
+        text = f"0{text}"
+    if len(text) != 4 or not text.isdigit():
+        raise ValueError(f"invalid HHMM value: {value!r}")
+    hour, minute = int(text[:2]), int(text[2:])
+    if hour > 23 or minute > 59:
+        raise ValueError(f"invalid HHMM value: {value!r}")
+    return text
+
+
+def hhmm_to_minutes(value: Any) -> int:
+    """将 HHMM/HH:MM 转为当天分钟数，供时间窗口逻辑复用。"""
+    text = normalize_hhmm(value)
+    return int(text[:2]) * 60 + int(text[2:])
 
 
 def get_rule_config() -> Dict[str, Any]:
@@ -192,4 +261,3 @@ def is_complete_shadow_result(result: Any) -> bool:
         if not isfinite(float(value)):
             return False
     return isinstance(result.get("is_false_breakout"), bool)
-

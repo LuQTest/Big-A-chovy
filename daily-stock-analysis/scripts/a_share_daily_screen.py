@@ -49,9 +49,19 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from tools.rule_config import RULE_CONFIG, get_rule_config  # noqa: E402
 
+RISK_CONFIG = RULE_CONFIG["risk"]
+RISK_STATUSES = RISK_CONFIG["statuses"]
+RISK_CLEAN = RISK_STATUSES["clean"]
+RISK_WATCH = RISK_STATUSES["watch_risk"]
+RISK_AVOID = RISK_STATUSES["avoid"]
+RISK_UNKNOWN = RISK_STATUSES["unknown"]
+RISK_STATUS_VALUES = frozenset(RISK_STATUSES.values())
+RISK_CHECKED_VALUES = frozenset({RISK_CLEAN, RISK_WATCH, RISK_AVOID})
+
 TZ = ZoneInfo("Asia/Shanghai")
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X) daily-stock-analysis/1.0"
 SSL_CONTEXT = ssl._create_unverified_context()
+import network_path  # 多路径实测延迟择优（直连+候选代理端口），软件无关
 
 # ── Per-host circuit breaker ──────────────────────────────────────────
 # Maps hostname -> timestamp of last failure.  Hosts that failed within
@@ -173,17 +183,15 @@ DECISION_CASH = "cash"
 DECISION_OBSERVE = "observe"
 DECISION_LOW_ABSORB = "low_absorb_only"
 DECISION_TRIAL = "trial_entry_allowed"
-DECISION_AVOID = "avoid"
+DECISION_AVOID = RISK_AVOID
 
 TIER_STRICT = "strict"
 TIER_HOPEFUL = "hopeful"
-TIER_AVOID = "avoid"
+TIER_AVOID = RISK_AVOID
 
 # 硬黑名单：框架明确记载的死亡螺旋/股灾级教训案例，无论资金面如何都不进入候选
 # 新增教训需附带日期和根因，避免黑名单无限膨胀
-HARD_BLACKLIST: Dict[str, str] = {
-    "600664": "20260728-框架教训：哈药股份暴涨后高位派发+追高→死亡螺旋，绝不补仓/不做低吸",
-}
+HARD_BLACKLIST: Dict[str, str] = dict(RISK_CONFIG["hard_blacklist"])
 
 # 软降权规则：以下条件任一满足 → 从低吸候选剔除（不标avoid，直接不出现）
 # 1. 20日累计涨幅 ≥30% 且 近5日主力净占比持续<0（高位派发信号）
@@ -243,7 +251,7 @@ PHASE_ORDER = [
 
 
 class NetworkUnavailable(RuntimeError):
-    """Raised when neither the system proxy nor a direct connection can fetch data."""
+    """Raised when none of the configured network paths can fetch data."""
 
     def __init__(self, url: str, errors: Dict[str, str]):
         self.url = url
@@ -265,7 +273,7 @@ def format_network_failure(error: NetworkUnavailable) -> str:
         lines.append(f"- {label}：{detail}")
     lines.extend([
         "已自动尝试独立备用行情源。若仍失败，可在浏览器确认行情页能否打开后重试；",
-        "如依赖公司/VPN代理，请把界面中的“网络连接”切到“系统代理”。",
+        "如直连受限，请在 daily-stock-analysis/scripts/proxy_ports.json 配置可用的本机 HTTP 代理端口后重试；",
     ])
     return "\n".join(lines)
 
@@ -294,25 +302,24 @@ def build_url_opener(network_mode: str):
     handlers = [urllib.request.HTTPSHandler(context=SSL_CONTEXT)]
     if network_mode == "direct":
         handlers.append(urllib.request.ProxyHandler({}))
-    else:
+    elif network_mode == "proxy":
         ph = _system_proxy_url()
         handlers.append(urllib.request.ProxyHandler({"http": ph, "https": ph} if ph else {}))
+    else:
+        # auto：实测最快的路径（直连或某个候选代理端口），不依赖系统代理设置
+        paths = network_path.best_paths()
+        if paths:
+            proxy = paths[0]["proxy"]
+            handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {}))
+        else:
+            ph = _system_proxy_url()
+            handlers.append(urllib.request.ProxyHandler({"http": ph, "https": ph} if ph else {}))
     return urllib.request.build_opener(*handlers)
 
-HARD_ANNOUNCEMENT_KEYWORDS = [
-    "减持", "被动减持", "清仓式减持", "监管函", "问询函", "关注函", "警示函",
-    "立案", "调查", "行政处罚", "纪律处分", "公开谴责", "退市风险", "其他风险警示",
-    "业绩预亏", "业绩亏损", "业绩预损", "业绩下修", "业绩修正", "大幅下降", "计提减值", "商誉减值",
-    "限售股上市流通", "解除限售", "解禁", "股份冻结", "司法冻结", "诉讼", "仲裁",
-    "债务逾期", "担保逾期", "资金占用", "无法表示意见", "保留意见", "停牌核查",
-]
-WATCH_ANNOUNCEMENT_KEYWORDS = [
-    "质押", "担保", "关联交易", "业绩快报", "业绩预告", "更正公告", "补充公告",
-    "高管辞职", "董事辞职", "会计政策变更", "审计机构", "股东大会延期",
-]
-ANNOUNCEMENT_IGNORE_KEYWORDS = [
-    "权益分派", "分红", "法律意见书", "独立意见", "任职资格核准", "股东大会决议",
-]
+ANNOUNCEMENT_CONFIG = RISK_CONFIG["announcement"]
+HARD_ANNOUNCEMENT_KEYWORDS = list(ANNOUNCEMENT_CONFIG["hard_keywords"])
+WATCH_ANNOUNCEMENT_KEYWORDS = list(ANNOUNCEMENT_CONFIG["watch_keywords"])
+ANNOUNCEMENT_IGNORE_KEYWORDS = list(ANNOUNCEMENT_CONFIG["ignore_keywords"])
 
 
 def fetch_json(url: str, params: Dict[str, Any], timeout: int = 6, retries: int = 0) -> Any:
@@ -322,7 +329,8 @@ def fetch_json(url: str, params: Dict[str, Any], timeout: int = 6, retries: int 
     elif NETWORK_MODE == "proxy":
         sessions = [("系统代理", REQUESTS_SESSION)]
     else:
-        sessions = [("直连", REQUESTS_DIRECT_SESSION), ("系统代理", REQUESTS_SESSION)]
+        # auto：实测所有路径（直连+各候选代理端口）延迟，最快优先，不依赖系统代理设置
+        sessions = network_path.ordered_sessions(REQUESTS_DIRECT_SESSION)
 
     for attempt in range(retries + 1):
         try:
@@ -363,6 +371,8 @@ def fetch_json(url: str, params: Dict[str, Any], timeout: int = 6, retries: int 
             errors["直连" if NETWORK_MODE == "direct" else "系统代理"] = f"{type(exc).__name__}: {detail}"
         if attempt < retries:
             time.sleep(0.5 * (attempt + 1))
+    # 所有路径都失败：丢弃测速缓存，下一次请求重新实测各路径
+    network_path.invalidate()
     raise NetworkUnavailable(url, errors)
 
 
@@ -469,7 +479,7 @@ class Enriched:
     price_above_vwap: bool = True
     flow_status: str = "数据不足"
     buy_ratio: float = float("nan")
-    risk_status: str = "unknown"
+    risk_status: str = RISK_UNKNOWN
 
 
 def normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -949,11 +959,11 @@ def classify_announcement_risk(titles: List[str]) -> Dict[str, Any]:
     hard = sorted({k for t in filtered for k in HARD_ANNOUNCEMENT_KEYWORDS if k in t})
     watch = sorted({k for t in filtered for k in WATCH_ANNOUNCEMENT_KEYWORDS if k in t})
     if hard:
-        level = "avoid"
+        level = RISK_AVOID
     elif watch:
-        level = "watch_risk"
+        level = RISK_WATCH
     else:
-        level = "clean"
+        level = RISK_CLEAN
     return {
         "announcement_risk": level,
         "announcement_keywords": hard or watch,
@@ -988,22 +998,22 @@ def _save_announcement_risk_cache(cache: Dict[str, Dict[str, Any]]) -> None:
 def _row_risk_status(row: Any) -> str:
     """Normalize announcement risk without treating missing as clean. Supports Dict and Enriched objects."""
     if row is None:
-        return "unknown"
+        return RISK_UNKNOWN
     if isinstance(row, dict):
         status = row.get("risk_status")
-        if status in {"clean", "watch_risk", "avoid", "unknown"}:
+        if status in RISK_STATUS_VALUES:
             return status
         legacy = row.get("announcement_risk")
-        if legacy in {"clean", "watch_risk", "avoid"}:
+        if legacy in RISK_CHECKED_VALUES:
             return legacy
-        return "unknown"
+        return RISK_UNKNOWN
     status = getattr(row, "risk_status", None)
-    if status in {"clean", "watch_risk", "avoid", "unknown"}:
+    if status in RISK_STATUS_VALUES:
         return status
     legacy = getattr(row, "announcement_risk", None)
-    if legacy in {"clean", "watch_risk", "avoid"}:
+    if legacy in RISK_CHECKED_VALUES:
         return legacy
-    return "unknown"
+    return RISK_UNKNOWN
 
 
 def announcement_label(row: Dict[str, Any]) -> str:
@@ -1011,8 +1021,8 @@ def announcement_label(row: Dict[str, Any]) -> str:
     keywords = row.get("announcement_keywords") or []
     if keywords:
         return f"{risk}({','.join(keywords[:3])})"
-    if risk == "unknown":
-        return "unknown(公告检查不可用)"
+    if risk == RISK_UNKNOWN:
+        return f"{RISK_UNKNOWN}(公告检查不可用)"
     return risk
 
 
@@ -1067,7 +1077,7 @@ def attach_announcement_risks(
             cache_fresh = checked_at is not None and now - float(checked_at) <= ANNOUNCEMENT_CACHE_TTL_SECONDS
         except (TypeError, ValueError):
             cache_fresh = False
-        if cache_fresh and cached_status in {"clean", "watch_risk", "avoid"}:
+        if cache_fresh and cached_status in RISK_CHECKED_VALUES:
             ann_map[code] = {
                 "announcement_risk": cached_status,
                 "risk_status": cached_status,
@@ -1123,10 +1133,10 @@ def attach_announcement_risks(
                 # A stale last-known avoid is still safer than silently
                 # downgrading a known risk to unknown when the source fails.
                 # TTL controls re-query skipping, not risk erasure.
-                if cached_status == "avoid":
+                if cached_status == RISK_AVOID:
                     ann_map[code] = {
-                        "announcement_risk": "avoid",
-                        "risk_status": "avoid",
+                        "announcement_risk": RISK_AVOID,
+                        "risk_status": RISK_AVOID,
                         "announcement_keywords": cached.get("keywords") or [],
                         "announcement_titles": cached.get("titles") or [],
                         "announcement_check": "unavailable",
@@ -1134,8 +1144,8 @@ def attach_announcement_risks(
                     }
                 else:
                     ann_map[code] = {
-                        "announcement_risk": "unknown",
-                        "risk_status": "unknown",
+                        "announcement_risk": RISK_UNKNOWN,
+                        "risk_status": RISK_UNKNOWN,
                         "announcement_keywords": [],
                         "announcement_titles": [],
                         "announcement_check": "unavailable",
@@ -1156,8 +1166,8 @@ def attach_announcement_risks(
 
     for row in rows_to_update:
         info = ann_map.get(str(row.get("code")), {
-            "announcement_risk": "unknown",
-            "risk_status": "unknown",
+            "announcement_risk": RISK_UNKNOWN,
+            "risk_status": RISK_UNKNOWN,
             "announcement_keywords": [],
             "announcement_titles": [],
             "announcement_check": "unavailable",
@@ -1165,25 +1175,25 @@ def attach_announcement_risks(
         })
         row.update(info)
         status = _row_risk_status(row)
-        if status == "avoid":
+        if status == RISK_AVOID:
             row["risk"] = append_risk_text(str(row.get("risk") or "无"), "公告硬风险")
             if row.get("class") in ("A", "B"):
                 row["class"] = "C"
-        elif status == "watch_risk":
+        elif status == RISK_WATCH:
             row["risk"] = append_risk_text(str(row.get("risk") or "无"), "公告观察风险")
-        elif status == "unknown":
+        elif status == RISK_UNKNOWN:
             row["risk"] = append_risk_text(str(row.get("risk") or "无"), "公告检查不可用")
     # 统一按代码索引的公告风险映射：所有模块（含状态机）从这里读取，
     # 不得各自重新查询或重新解析。缺失一律 unknown（fail-closed）。
     result["announcement_risk_map"] = {
-        code: info.get("risk_status", "unknown") for code, info in ann_map.items()
+        code: info.get("risk_status", RISK_UNKNOWN) for code, info in ann_map.items()
     }
     result["announcement_errors"] = sorted(set(errors))
     result["announcement_check_available"] = not errors
     result["announcement_unknown_codes"] = sorted({
         str(row.get("code"))
         for row in rows
-        if _row_risk_status(row) == "unknown"
+        if _row_risk_status(row) == RISK_UNKNOWN
     })
     if risk_cache is None and cache_changed:
         _save_announcement_risk_cache(cache)
@@ -1199,7 +1209,7 @@ def apply_announcement_pool_gates(result: Dict[str, Any]) -> None:
             "pre_intersection", "capital_rank", "trend_diagnostics", "low_ultra", "low_trend", "watchlist",
         )
         for row in (result.get(section) or [])
-        if _row_risk_status(row) == "unknown"
+        if _row_risk_status(row) == RISK_UNKNOWN
     }
     result["announcement_unknown_codes"] = sorted(
         set(result.get("announcement_unknown_codes") or []) | unknown_codes
@@ -1211,27 +1221,27 @@ def apply_announcement_pool_gates(result: Dict[str, Any]) -> None:
     # statuses are not allowed to upgrade into a tradeable recommendation.
     result["trend_observation"] = [
         row for row in (result.get("trend_observation") or [])
-        if _row_risk_status(row) != "avoid"
+        if _row_risk_status(row) != RISK_AVOID
     ]
     for section in ("strict_trend", "dual_pool", "capital_rank"):
         result[section] = [
             row for row in (result.get(section) or [])
-            if _row_risk_status(row) not in {"avoid", "unknown"}
+            if _row_risk_status(row) not in {RISK_AVOID, RISK_UNKNOWN}
         ]
     for section in ("low_ultra", "low_trend"):
         for row in result.get(section) or []:
             status = _row_risk_status(row)
-            if status == "avoid":
+            if status == RISK_AVOID:
                 row["risk"] = append_risk_text(str(row.get("risk") or "无"), "公告硬风险")
                 row["class"] = "C"
-            elif status == "unknown":
+            elif status == RISK_UNKNOWN:
                 row["risk"] = append_risk_text(str(row.get("risk") or "无"), "公告检查不可用")
                 row["class"] = "C"
     for row in result.get("trend_diagnostics") or []:
         status = _row_risk_status(row)
-        if status == "avoid":
+        if status == RISK_AVOID:
             row["upgrade_status"] = "公告avoid，禁止升级"
-        elif status == "unknown":
+        elif status == RISK_UNKNOWN:
             row["upgrade_status"] = "公告unknown，数据不足，禁止升级"
 
 
@@ -1607,19 +1617,24 @@ def _should_exclude_from_low_absorb(
     e: "Enriched", flow_history: Dict[str, List[Dict[str, Any]]]
 ) -> Tuple[bool, str]:
     """框架教训落地：硬黑名单 + 高位派发降权。返回 (是否排除, 原因)。"""
+    exclusion_cfg = RISK_CONFIG["low_absorb_exclusion"]
     # 硬黑名单：框架明确记载的教训案例
     if e.code in HARD_BLACKLIST:
         return True, HARD_BLACKLIST[e.code]
     # 软降权：5日累计涨幅≥12% + 近3+次快照主力净占比持续≤0 → 高位派发信号
-    if e.five_ret >= 0.12 and e.main_pct <= 0:
+    if (
+        e.five_ret >= float(exclusion_cfg["five_day_return_min_ratio"])
+        and e.main_pct <= float(exclusion_cfg["main_pct_max_inclusive"])
+    ):
         hist = (flow_history or {}).get(e.code) or []
+        lookback = int(exclusion_cfg["history_lookback_snapshots"])
         neg_count = sum(
-            1 for h in hist[-6:] if h.get("main_net", 0) <= 0
+            1 for h in hist[-lookback:] if h.get("main_net", 0) <= 0
         )
-        if neg_count >= 3:
+        if neg_count >= int(exclusion_cfg["negative_main_snapshots_min"]):
             return True, (
                 f"高位派发降权：5日涨{e.five_ret*100:.1f}%+"
-                f"近{len(hist[-6:])}次快照{neg_count}次主力净流出"
+                f"近{len(hist[-lookback:])}次快照{neg_count}次主力净流出"
             )
     return False, ""
 
@@ -2141,7 +2156,7 @@ def rank_capital_candidates(
         )
 
         risk_status = _row_risk_status(e)
-        is_clean = (risk_status == "clean")
+        is_clean = (risk_status == RISK_CLEAN)
 
         if (
             sector_active
@@ -2409,7 +2424,7 @@ def _intersection_rejection_reasons(row: Dict[str, Any]) -> List[str]:
         reasons.append("无板块共振")
 
     risk = _row_risk_status(row)
-    if risk != "clean":
+    if risk != RISK_CLEAN:
         reasons.append(f"公告风险非clean({risk})")
 
     deduped: List[str] = []
@@ -2674,7 +2689,7 @@ def compute_pre_intersection(
         row["gate_failures"] = gate_failures
         row["gate_failure_text"] = "；".join(gate_failures) if gate_failures else "全部通过"
         row["risk_note"] = (
-            f"公告风险仅观察({risk})" if (phase in ("准交集", "等待转强") and risk != "clean") else ""
+            f"公告风险仅观察({risk})" if (phase in ("准交集", "等待转强") and risk != RISK_CLEAN) else ""
         )
         out.append(row)
     return out
@@ -2739,7 +2754,7 @@ def evaluate_intersection_states(
         # 需求2：所有模块从同一份按代码索引的公告风险结果读取；缺失=unknown
         if code in risk_map:
             status = str(risk_map[code])
-            return status if status else "unknown"
+            return status if status else RISK_UNKNOWN
         return _row_risk_status(row)
 
     def _entry_allowed(risk: str) -> Tuple[bool, str]:
@@ -2749,7 +2764,7 @@ def evaluate_intersection_states(
         DOWNGRADE 环境的附加条件（clean+共振+回踩确认）已是 ENTRY_ELIGIBLE
         的必要条件；CASH 一律禁止。
         """
-        if risk != "clean":
+        if risk != RISK_CLEAN:
             return False, f"公告风险否决({risk})"
         if past_deadline:
             return False, "已过新开仓截止，仅供明日观察"
@@ -2773,7 +2788,7 @@ def evaluate_intersection_states(
         phase_code = _canonical_phase(item.get("phase"))
         label = display_label or PHASE_LABELS.get(phase_code, phase_code)
         risk = item.get("risk_status") or _risk_for(code, row)
-        risk_clean = risk == "clean"
+        risk_clean = risk == RISK_CLEAN
         first = _parse_intersection_datetime(item.get("first_intersection_at")) or now
         age = round(max(0.0, (now - first).total_seconds() / 60), 1)
         minute_info = minute_map.get(code)
@@ -2913,7 +2928,7 @@ def evaluate_intersection_states(
             and is_number(flow5) and flow5 > 0
             and is_number(flow15) and flow15 > 0
             and resonance
-            and risk == "clean"
+            and risk == RISK_CLEAN
         )
         if not fresh:
             retest_confirmed = False
@@ -3116,7 +3131,7 @@ def evaluate_intersection_states(
             "name": item.get("name") or code,
             "price": item.get("trigger_price"),
             "change": None,
-            "risk_status": item.get("risk_status") or "unknown",
+            "risk_status": item.get("risk_status") or RISK_UNKNOWN,
             "latched_hold": True,
         }
         _emit(synth, item)
@@ -3172,7 +3187,7 @@ def evaluate_watchlist_breakout_states(
     明日观察池突破升级状态机（来源：选股框架.md 8/21 权威定版）：
     流转路径: WATCHING → TRIGGERED → CONFIRMED → B_BREAKOUT → A_STRICT
     - 跨交易日合并：将昨日已持久化的观察池标的与今日新候选求并集，确保昨日标的在次日开盘能无缝流转
-    - 09:30–10:10 原则上只观察（不可直升 B_BREAKOUT/A_STRICT）
+    - 09:30–09:40 原则上只观察（不可直升 B_BREAKOUT/A_STRICT）
     - 至少 2 次快照确认
     - avoid 一票否决
     - 超过追高禁区、跌回触发价或 5 分钟转负立即降级重置
@@ -3235,7 +3250,7 @@ def evaluate_watchlist_breakout_states(
         res = has_resonance(e, stats) if e else False
 
         # 公告风控解析（优先从 risk_map 获取，次选 _row_risk_status）
-        risk = "unknown"
+        risk = RISK_UNKNOWN
         if risk_map and code in risk_map:
             risk = risk_map[code]
         elif e:
@@ -3248,11 +3263,11 @@ def evaluate_watchlist_breakout_states(
         breakout_class = "WATCHING"
         status_note = "处于触发价下方观察"
 
-        if risk == "avoid":
+        if risk == RISK_AVOID:
             cur_phase = "INVALID"
             breakout_class = "INVALID"
             confirm_count = 0
-            status_note = "公告风控 avoid 否决"
+            status_note = f"公告风控 {RISK_AVOID} 否决"
         elif cur_price > no_chase_price:
             cur_phase = "OVER_CHASE"
             breakout_class = "WATCHING"
@@ -3286,9 +3301,9 @@ def evaluate_watchlist_breakout_states(
                         cur_phase = "CONFIRMED"
                         if is_morning_observe:
                             breakout_class = "CONFIRMED"
-                            status_note = f"09:30-10:10 观察期锁定(已站稳{confirm_count}期·板块共振)"
+                            status_note = f"09:30-09:40 观察期锁定(已站稳{confirm_count}期·板块共振)"
                         else:
-                            # 10:10 后根据资金强度评定 A_STRICT 或 B_BREAKOUT
+                            # 09:40 后根据资金强度评定 A_STRICT 或 B_BREAKOUT
                             mp_val = getattr(e, "main_pct", 0) if e else 0
                             main_pct = float(mp_val) if isinstance(mp_val, (int, float)) else 0.0
                             hp_val = getattr(e, "high_pull", 0) if e else 0
@@ -3299,7 +3314,7 @@ def evaluate_watchlist_breakout_states(
                             # A_STRICT 严格要求：绝对主导 + clean + 主力>=5% + 回落<1.5% + 主买比>=1.5（严禁缺数据放行）
                             is_a_strict = (
                                 dom_type == "absolute" and
-                                risk == "clean" and
+                                risk == RISK_CLEAN and
                                 main_pct >= float(breakout_cfg["a_main_pct_min"]) and
                                 high_pull < float(breakout_cfg["a_high_pullback_max_exclusive"]) and
                                 buy_ratio is not None and
@@ -3689,7 +3704,7 @@ def main() -> int:
     parser.add_argument("--skip-capital-ranking", action="store_true", help="skip capital-flow secondary ranking")
     parser.add_argument("--announcement-page-size", type=int, default=8, help="latest announcement rows per stock")
     parser.add_argument("--network-mode", choices=["auto", "direct", "proxy"], default="auto",
-                        help="connection strategy: auto (proxy then direct), direct, or proxy")
+                        help="connection strategy: auto (measure latency of direct+proxy paths, pick fastest), direct, or proxy")
     args = parser.parse_args()
     set_network_mode(args.network_mode)
     MARKET_WARNINGS.clear()
@@ -3954,15 +3969,15 @@ def main() -> int:
                 "trend_diagnostics", "low_ultra", "low_trend", "watchlist",
             )
             for row in (result.get(section) or [])
-            if _row_risk_status(row) == "unknown"
+            if _row_risk_status(row) == RISK_UNKNOWN
         })
         apply_announcement_pool_gates(result)
 
     # 汇总统一公告风控字典。公告查询结果是唯一权威来源；其它池子只
     # 用来补齐查询结果缺失的代码，且缺失状态一律 unknown（fail-closed）。
-    valid_risk_statuses = {"clean", "watch_risk", "avoid", "unknown"}
+    valid_risk_statuses = RISK_STATUS_VALUES
     risk_map: Dict[str, str] = {
-        str(code): (status if isinstance(status, str) and status in valid_risk_statuses else "unknown")
+        str(code): (status if isinstance(status, str) and status in valid_risk_statuses else RISK_UNKNOWN)
         for code, status in (result.get("announcement_risk_map") or {}).items()
         if code
     }
@@ -3978,13 +3993,13 @@ def main() -> int:
 
     # 将确切的公告风控状态同步赋给 Enriched 实例
     for e in enriched:
-        e.risk_status = risk_map.get(e.code, "unknown")
+        e.risk_status = risk_map.get(e.code, RISK_UNKNOWN)
 
     # --- 在公告检查之后统一执行主力资金优选排序（确保 clean 硬门槛生效） ---
     strict_candidate_codes = {
         r["code"]
         for r in (result.get("strict_ultra") or []) + (result.get("trend_observation") or [])
-        if _row_risk_status(r) not in {"avoid", "unknown"}
+        if _row_risk_status(r) not in {RISK_AVOID, RISK_UNKNOWN}
     }
     capital_rank = [] if args.skip_capital_ranking or fallback_snapshot else rank_capital_candidates(
         [e for e in enriched if e.code in strict_candidate_codes], stats, flow_history

@@ -13,14 +13,15 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import BooleanVar, END, IntVar, StringVar, Tk, Toplevel, filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
-from a_share_daily_screen import build_url_opener, NETWORK_MODE
+from a_share_daily_screen import build_url_opener, NETWORK_MODE, RISK_AVOID, RISK_WATCH
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent
 SCREEN_SCRIPT = SCRIPT_DIR / "a_share_daily_screen.py"
 HOLDINGS_FILE = SCRIPT_DIR / "holdings.json"
 SETTINGS_FILE = SCRIPT_DIR / "gui_settings.json"
-OUTPUT_DIR = Path("/Users/luqiang/Documents/Others/股票/筛选结果")
+OUTPUT_DIR = PROJECT_ROOT / "筛选结果"
 
 
 def default_output_path() -> Path:
@@ -176,7 +177,7 @@ class App:
             state="readonly",
             width=10,
         ).pack(side="left")
-        ttk.Label(opt_row, text="自动会依次尝试代理和直连").pack(side="left", padx=(6, 0))
+        ttk.Label(opt_row, text="自动实测直连和候选代理，按最快路径尝试").pack(side="left", padx=(6, 0))
 
         # --- holdings section ---
         hold_frame = ttk.LabelFrame(frame, text="持仓管理", padding=4)
@@ -864,7 +865,7 @@ class App:
                 # risk keywords
                 for kw in ("追高风险", "冲高回落风险", "尾盘追高风险", "巨量滞涨", "均价线下方",
                            "放量滞涨风险", "板块共振不足", "持仓区/止盈区", "趋势观察池",
-                           "avoid", "watch_risk", "公告硬风险", "公告观察风险"):
+                           RISK_AVOID, RISK_WATCH, "公告硬风险", "公告观察风险"):
                     start = 0
                     while True:
                         idx = line.find(kw, start)

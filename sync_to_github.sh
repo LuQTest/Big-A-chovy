@@ -3,8 +3,8 @@
 # 由 LaunchAgent com.luqiang.syncstock 每 5 分钟触发一次
 # 无变更时零操作退出；有变更才 commit + push
 
-REPO="/Users/luqiang/Documents/Others/股票"
-LOG="$HOME/Library/Logs/sync_to_github.log"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG="${TMPDIR:-/tmp}/big-a-chovy-sync.log"
 
 cd "$REPO" || exit 1
 
@@ -16,7 +16,7 @@ if git diff --cached --quiet; then
 fi
 
 # 有变更：提交并推送
-git commit -m "auto-sync: $(date '+%Y-%m-%d %H:%M') 筛选结果/决策记录自动同步" 2>>"$LOG"
+git commit -m "auto-sync: $(date '+%Y-%m-%d %H:%M') source update" 2>>"$LOG"
 
 if git push origin main 2>>"$LOG"; then
   echo "[$(date '+%F %T')] synced OK: $(git rev-parse --short HEAD)" >>"$LOG"

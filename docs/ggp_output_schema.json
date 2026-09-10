@@ -1,0 +1,457 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ggp.v1",
+  "title": "A-share ggp polling output",
+  "description": "Stable machine-readable contract for the ggp polling workflow.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "as_of",
+    "summary",
+    "poll",
+    "market",
+    "decision",
+    "holdings",
+    "t1_plan",
+    "errors",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "ggp.v1"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["complete", "partial", "error"]
+    },
+    "as_of": {
+      "type": ["string", "null"],
+      "description": "ISO-8601 timestamp with timezone; null when unavailable."
+    },
+    "summary": {
+      "type": "string"
+    },
+    "poll": {
+      "$ref": "#/$defs/poll"
+    },
+    "market": {
+      "$ref": "#/$defs/market"
+    },
+    "decision": {
+      "$ref": "#/$defs/decision"
+    },
+    "holdings": {
+      "$ref": "#/$defs/holdings"
+    },
+    "t1_plan": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/t1_item"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "code": {
+      "type": "string",
+      "pattern": "^[0-9]{6}$",
+      "description": "Always a six-character string. Never emit a number."
+    },
+    "poll": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "last_user_message_at",
+        "reports_checked",
+        "report_count",
+        "latest_report",
+        "data_sources"
+      ],
+      "properties": {
+        "last_user_message_at": {
+          "type": ["string", "null"]
+        },
+        "reports_checked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "report_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latest_report": {
+          "type": ["string", "null"]
+        },
+        "data_sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["screening_reports", "dashboard_api", "quote", "order_book", "trades", "financials", "decision_record"]
+          }
+        }
+      }
+    },
+    "market": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "indices", "breadth"],
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "indices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/index"
+          }
+        },
+        "breadth": {
+          "$ref": "#/$defs/breadth"
+        }
+      }
+    },
+    "index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "name", "price", "change_pct"],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "price": {
+          "type": ["number", "null"]
+        },
+        "change_pct": {
+          "type": ["number", "null"]
+        }
+      }
+    },
+    "breadth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["advancing", "declining", "flat", "limit_up", "limit_down"],
+      "properties": {
+        "advancing": {
+          "type": ["integer", "null"]
+        },
+        "declining": {
+          "type": ["integer", "null"]
+        },
+        "flat": {
+          "type": ["integer", "null"]
+        },
+        "limit_up": {
+          "type": ["integer", "null"]
+        },
+        "limit_down": {
+          "type": ["integer", "null"]
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["overall", "real_open", "simulated_buy", "watch_or_real_blocked", "fully_cash", "reason"],
+      "properties": {
+        "overall": {
+          "type": "string",
+          "enum": ["real_open", "simulated_only", "fully_cash"]
+        },
+        "real_open": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/candidate"
+          }
+        },
+        "simulated_buy": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/candidate"
+          }
+        },
+        "watch_or_real_blocked": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/candidate"
+          }
+        },
+        "fully_cash": {
+          "type": "boolean",
+          "description": "true exactly when real_open and simulated_buy are both empty. Watch-only rows may still exist."
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "name", "source", "classification", "signal_type", "current", "capital", "risk", "buy_plan", "blockers", "support"],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/code"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["dual_pool", "strict_ultra", "low_ultra", "trend_observation", "strict_trend", "state_machine", "watchlist", "capital_rank", "manual_focus", "other"]
+        },
+        "classification": {
+          "type": "string",
+          "enum": ["real_open", "simulated_buy", "watch_only", "real_blocked"]
+        },
+        "signal_type": {
+          "type": "string",
+          "enum": ["absolute", "coalition", "watchlist_breakout", "sector_boost", "divergence_leader", "standard", "none", "unknown"]
+        },
+        "current": {
+          "$ref": "#/$defs/current"
+        },
+        "capital": {
+          "$ref": "#/$defs/capital"
+        },
+        "risk": {
+          "$ref": "#/$defs/risk"
+        },
+        "buy_plan": {
+          "$ref": "#/$defs/buy_plan"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "support": {
+          "$ref": "#/$defs/support"
+        }
+      }
+    },
+    "current": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["price", "change_pct", "pullback_pct", "vwap_status"],
+      "properties": {
+        "price": {
+          "type": ["number", "null"]
+        },
+        "change_pct": {
+          "type": ["number", "null"]
+        },
+        "pullback_pct": {
+          "type": ["number", "null"]
+        },
+        "vwap_status": {
+          "type": "string",
+          "enum": ["above", "near", "below", "unknown"]
+        }
+      }
+    },
+    "capital": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["main_net_wan", "main_pct", "flow_5m_wan", "super_net_wan", "dominance_type"],
+      "properties": {
+        "main_net_wan": {
+          "type": ["number", "null"],
+          "description": "主力净额，单位：万元。"
+        },
+        "main_pct": {
+          "type": ["number", "null"]
+        },
+        "flow_5m_wan": {
+          "type": ["number", "null"],
+          "description": "5分钟增量，单位：万元。"
+        },
+        "super_net_wan": {
+          "type": ["number", "null"],
+          "description": "超大单净额，单位：万元。"
+        },
+        "dominance_type": {
+          "type": "string",
+          "enum": ["absolute", "coalition", "none", "unknown"]
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["announcement", "vetoes"],
+      "properties": {
+        "announcement": {
+          "type": "string",
+          "enum": ["clean", "watch_risk", "avoid", "unknown"]
+        },
+        "vetoes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "buy_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["buy_low", "buy_high", "stop", "take_profit", "t1_action"],
+      "properties": {
+        "buy_low": {
+          "type": ["number", "null"]
+        },
+        "buy_high": {
+          "type": ["number", "null"]
+        },
+        "stop": {
+          "type": ["number", "null"]
+        },
+        "take_profit": {
+          "type": ["number", "null"]
+        },
+        "t1_action": {
+          "type": "string"
+        }
+      }
+    },
+    "support": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sector", "capital", "order_book", "vwap", "fundamentals", "simulation", "risk_reward"],
+      "properties": {
+        "sector": {
+          "type": "string"
+        },
+        "capital": {
+          "type": "string"
+        },
+        "order_book": {
+          "type": "string"
+        },
+        "vwap": {
+          "type": "string"
+        },
+        "fundamentals": {
+          "type": "string"
+        },
+        "simulation": {
+          "type": "string"
+        },
+        "risk_reward": {
+          "type": "string"
+        }
+      }
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "name", "qty", "cost", "stop", "sector", "buy_date", "note"],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/code"
+        },
+        "name": {
+          "type": "string"
+        },
+        "qty": {
+          "type": ["integer", "null"]
+        },
+        "cost": {
+          "type": ["number", "null"]
+        },
+        "stop": {
+          "type": ["number", "null"]
+        },
+        "sector": {
+          "type": "string"
+        },
+        "buy_date": {
+          "type": ["string", "null"]
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "holdings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["simulated", "real", "real_mother", "cash"],
+      "properties": {
+        "simulated": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/position"
+          }
+        },
+        "real": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/position"
+          }
+        },
+        "real_mother": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/position"
+          }
+        },
+        "cash": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["real_available"],
+          "properties": {
+            "real_available": {
+              "type": ["number", "null"]
+            }
+          }
+        }
+      }
+    },
+    "t1_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "name", "priority", "action", "condition", "execute_at"],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/code"
+        },
+        "name": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["real", "simulated", "real_mother", "watchlist", "none"]
+        },
+        "action": {
+          "type": "string"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "execute_at": {
+          "type": ["string", "null"]
+        }
+      }
+    }
+  }
+}

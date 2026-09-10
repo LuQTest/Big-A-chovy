@@ -6,13 +6,18 @@
 
 职责边界：`daily-stock-analysis` 仅是筛选与报告发现工具，不承担最终买卖、仓位或持仓裁决。最终决策入口是 `盘中` skill，交易规则以根目录 `选股框架.md` 为准，实际持仓以 `决策记录/` 为准。
 
+## 版本标识
+
+- 线上预览版：`v0.0.1`，作为本次清理前的远程 `main` 基线。
+- 当前开发预览版：`v0.1`，包含本次路径、隐私排除和跨用户运行兼容性收尾；盘中网络稳定性与策略效果仍在持续验证，暂不称为稳定版。
+
 ## 一、快速开始
 
 ### 环境要求
 
 - macOS（双击 `.command` 启动器需要 macOS）。
 - Python 3.10 或更高版本，建议使用 Python 3.13。
-- 能访问行情接口的网络环境。部分网络需要先开启 Clash 等系统代理。
+- 能访问行情接口的网络环境。默认 `auto` 模式会实测直连、本机候选代理端口、环境代理和系统代理后择优；如直连受限，请在 `daily-stock-analysis/scripts/proxy_ports.json` 中配置可用的本机 HTTP 代理端口。代理软件不限定为 Clash。
 
 > 当前版本未做 Windows 适配。项目中的 `.command` 启动器、macOS `scutil` 代理检测、`open`/`osascript` 和部分进程管理命令均按 macOS 编写。Windows 用户可以自行尝试直接运行核心 Python 脚本，但 GUI、实时看板启动、代理检测和路径行为不保证正常，也暂不提供 Windows 专用安装或启动方案。
 
@@ -70,8 +75,8 @@ python3 daily-stock-analysis/scripts/a_share_daily_screen.py \
 | `--format md/json` | 输出 Markdown 或 JSON |
 | `--top 15` | 每个模块最多输出多少条 |
 | `--save 文件路径` | 同时保存到指定文件 |
-| `--network-mode auto` | 优先代理，失败后尝试直连 |
-| `--network-mode proxy` | 强制使用系统代理 |
+| `--network-mode auto` | 并发实测直连、候选代理、环境/系统代理，按实际可用延迟择优 |
+| `--network-mode proxy` | 仅使用环境变量或 macOS 系统代理；本机候选端口请使用 `auto` 模式，由 `daily-stock-analysis/scripts/proxy_ports.json` 管理 |
 | `--network-mode direct` | 强制直连 |
 | `--skip-announcements` | 跳过公告风险检查，不建议日常使用 |
 | `--skip-capital-ranking` | 跳过资金排名辅助模块 |
@@ -192,7 +197,7 @@ python3 tools/detect_divergence_leader.py --date 20260824 --record
 
 ### 本机私有目录
 
-只在本机排除个人报告，不修改共享项目规则：
+项目级 `.gitignore` 已统一排除个人报告和决策记录；它会随仓库同步，其他使用者克隆后也默认受到保护。`.git/info/exclude` 仍可作为某台机器的额外保护，但不是项目正常运行所必需：
 
 ```bash
 cat >> .git/info/exclude <<'EOF'
@@ -201,7 +206,7 @@ cat >> .git/info/exclude <<'EOF'
 EOF
 ```
 
-`.git/info/exclude` 不会被提交，也不会影响其他使用者。项目级 `.gitignore` 已排除缓存、持仓、GUI 设置、影子样本和回滚备份。
+`.git/info/exclude` 不会被提交，也不会影响其他使用者。项目级 `.gitignore` 同时排除了缓存、持仓、GUI 设置、影子样本、回滚备份、`筛选结果/` 和 `决策记录/`。
 
 同步前检查：
 
@@ -229,15 +234,14 @@ git diff --cached --name-only
 
 如果出现“无法连接行情服务”或筛选长时间无结果：
 
-1. 确认交易数据源可访问；部分网络需要开启系统代理。
-2. 先尝试：
+1. 默认使用 `auto`：启动或首次请求时会实测直连、`proxy_ports.json` 的候选端口、环境代理和系统代理，按最快可用路径请求。
+2. 若直连受限，编辑 `daily-stock-analysis/scripts/proxy_ports.json` 的 `candidate_ports`，填入代理软件提供的本机 HTTP 端口，然后运行诊断：
 
    ```bash
-   python3 daily-stock-analysis/scripts/a_share_daily_screen.py \
-     --mode strict --network-mode proxy
+   python3 daily-stock-analysis/scripts/network_path.py
    ```
 
-3. 如果代理不可用，再尝试 `--network-mode direct`。
+3. 需要诊断单一路径时，可用 `--network-mode direct` 或 `--network-mode proxy`；正常使用建议保留 `auto`。
 4. 看板无法连接时，确认 `8765` 端口没有被旧进程占用，并运行停止脚本后重新启动。
 5. 行情接口部分失败时，不要把降级结果当成完整实时结果；优先等待网络恢复。
 
@@ -286,10 +290,20 @@ python3 -m unittest discover -s daily-stock-analysis/scripts -p 'test_*.py'
 
 以下问题已知存在，后续需要通过 Agent 修改代码或启动配置解决：
 
-1. **筛选结果保存路径**：部分 GUI 和实时看板代码仍使用本机固定路径。后续应改为基于项目根目录的相对路径，或提供可配置的输出目录，方便其他使用者直接运行。
-2. **网络代理依赖 Clash Verge**：当前运行环境需要通过 Clash Verge 的系统代理访问行情接口，直连行情服务会被封锁。使用实时筛选或看板前，应确认 Clash Verge 已启动并开启系统代理；命令行可使用 `--network-mode proxy`。
+1. **筛选结果保存路径**：已修复。GUI、实时看板和 `.command` 失败回退路径均基于项目根目录解析，克隆到其他位置后可直接运行；命令行 `--save` 仍可按使用者需要指定路径。
+2. **网络路径（已代码内实测择优，2026-09-09；同日方案 C 增强）**：`daily-stock-analysis/scripts/network_path.py` 对「直连 + 本机候选代理端口（软件无关）+ 环境代理 + 系统代理」并发实测真实东财接口延迟，按实际可用路径择优；不预设代理或直连优先，路径失败后会重测。看板不再因无代理而放弃筛选；诊断运行 `python3 daily-stock-analysis/scripts/network_path.py`。
+   - **配置唯一来源**：`daily-stock-analysis/scripts/proxy_ports.json` 的 `candidate_ports`，`network_path.py` 与 `keep_proxy_alive.sh` 读同一份——**换代理软件只改这一处**。
+   - **多端点探测**：主端点（push2delay）必须通该路径才可用；辅助端点（82push2 资金流 / push2his K线）不通只记降级 + 排序惩罚，不一票否决。单端点探测曾漏掉「某出口 82push2 超时但 push2delay 正常」的故障。
+   - **切换粘性**：当前路径比最快路径慢不超过 50ms 就不换——实测两条路常只差 1~2ms，纯按延迟排序会导致抖动。
+   - **熔断冷却**：连续失败 3 次冷却 60s；全部在冷却时仍放行，避免无路可走。
+   - 「太慢」判定用主端点实测延迟，不用含惩罚的评分（否则降级惩罚会把所有路径误判成太慢）。
+   - 测试：`scripts/test_network_path.py`（28 个用例，覆盖枚举/验活/降级/粘性/缓存/熔断/配置回退）。
+   - 历史坑：旧版脚本硬编码 7897 并 `open -a "Clash Verge"`，会与新代理软件争夺系统代理、关掉 Verge 就断网。
+   - 2026-09-08 实测行情接口直连可达（0.08~0.2s），旧结论"直连会被封锁"已不成立。盘中高峰稳定性仍待验证。
 
 ## 十、内置 Skill
+
+项目版是唯一维护和执行入口；已安装旧版已停用，不再复制安装。在本工作区依据 AGENTS.md 加载项目文件。
 
 项目内置盘中快速接入 Skill：[`skills/盘中/SKILL.md`](skills/盘中/SKILL.md)。
 

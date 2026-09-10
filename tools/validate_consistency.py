@@ -26,7 +26,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from tools.rule_config import (  # noqa: E402
     RULE_CONFIG,
+    hhmm_to_minutes,
     is_complete_shadow_result,
+    normalize_hhmm,
     shadow_targets,
 )
 
@@ -62,10 +64,12 @@ def check_config(config: Dict[str, Any] = RULE_CONFIG) -> Dict[str, List[Dict[st
     try:
         absolute = config["dominance"]["absolute"]
         coalition = config["dominance"]["coalition"]
+        execution = config["execution"]
+        risk = config["risk"]
         shadow = config["shadow"]
         permissions = config["permissions"]
     except (KeyError, TypeError):
-        _add(result, "fail", "共享参数缺少 dominance/shadow/permissions 核心区段")
+        _add(result, "fail", "共享参数缺少 dominance/execution/risk/shadow/permissions 核心区段")
         return result
 
     try:
@@ -80,6 +84,8 @@ def check_config(config: Dict[str, Any] = RULE_CONFIG) -> Dict[str, List[Dict[st
             _add(result, "fail", "合力主升主买比门槛低于 1.5")
         if int(coalition["min_history_snapshots"]) < 2:
             _add(result, "fail", "合力主升历史快照门槛低于 2 期")
+        if float(coalition["max_decay_pct"]) != 0.0:
+            _add(result, "fail", "合力主升要求未衰减，不能配置资金衰减容忍度")
     except (KeyError, TypeError, ValueError):
         _add(result, "fail", "合力主升参数类型或字段不完整")
 
@@ -92,6 +98,58 @@ def check_config(config: Dict[str, Any] = RULE_CONFIG) -> Dict[str, List[Dict[st
             _add(result, "pass", f"影子验证登记 {len(categories)} 类，目标为每类 {target} 个样本")
     except (KeyError, TypeError, ValueError):
         _add(result, "fail", "影子验证参数类型或字段不完整")
+
+    try:
+        windows = execution["time_windows"]
+        if not isinstance(windows, dict) or not windows:
+            raise ValueError("time_windows is empty")
+        for key, window in windows.items():
+            if not isinstance(window, dict):
+                raise ValueError(f"{key} is not an object")
+            start = hhmm_to_minutes(window["start"])
+            end = hhmm_to_minutes(window["end"])
+            if start >= end or not str(window.get("label", "")).strip():
+                raise ValueError(f"invalid window: {key}")
+        fallback_key = str(execution["fallback_window"])
+        if fallback_key not in windows:
+            raise ValueError("fallback window is not registered")
+        pre_market = execution["pre_market"]
+        hhmm_to_minutes(pre_market["start"])
+        if not pre_market.get("key") or not pre_market.get("label"):
+            raise ValueError("pre_market metadata is incomplete")
+        t1_window = execution["t1_exit_window"]
+        t1_start = hhmm_to_minutes(t1_window["start"])
+        t1_end = hhmm_to_minutes(t1_window["end"])
+        t1_target = hhmm_to_minutes(t1_window["target"])
+        if not t1_start <= t1_target <= t1_end:
+            raise ValueError("T+1 target is outside its exit window")
+        _add(result, "pass", "执行时段与 T+1 窗口已集中登记且边界有效")
+    except (KeyError, TypeError, ValueError):
+        _add(result, "fail", "执行时段或 T+1 窗口参数类型、字段或边界不完整")
+
+    try:
+        statuses = risk["statuses"]
+        expected_status_keys = {"clean", "watch_risk", "avoid", "unknown"}
+        if set(statuses) != expected_status_keys or any(not str(value) for value in statuses.values()):
+            raise ValueError("risk status registry is incomplete")
+        announcement = risk["announcement"]
+        for key in ("hard_keywords", "watch_keywords", "ignore_keywords"):
+            if not isinstance(announcement[key], list):
+                raise ValueError(f"announcement {key} is not a list")
+        exclusion = risk["low_absorb_exclusion"]
+        for key in (
+            "five_day_return_min_ratio",
+            "main_pct_max_inclusive",
+            "history_lookback_snapshots",
+            "negative_main_snapshots_min",
+        ):
+            if not _numeric(exclusion[key]):
+                raise ValueError(f"low_absorb_exclusion missing {key}")
+        if not isinstance(risk["hard_blacklist"], dict):
+            raise ValueError("hard_blacklist is not an object")
+        _add(result, "pass", "公告风控状态、关键词、黑名单与低吸排除参数已集中登记")
+    except (KeyError, TypeError, ValueError):
+        _add(result, "fail", "风险策略参数类型或字段不完整")
 
     if permissions.get("real_account_requires_complete_samples") is not True:
         _add(result, "fail", "真实仓权限门槛未设置为完整结算样本强制门禁")
@@ -145,12 +203,25 @@ def check_documents(project_root: Path = PROJECT_ROOT) -> Dict[str, List[Dict[st
     else:
         _add(result, "pass", "选股框架合力参数与共享配置逐项匹配")
 
-    claude_required = ("✓(合力)", "20个完整结算样本", "真实仓")
+    claude_required = ("选股框架.md", "skills/盘中/SKILL.md", "七项支撑")
     missing = [fragment for fragment in claude_required if fragment not in claude]
     if missing:
-        _add(result, "fail", f"CLAUDE.md 缺少关键执行门槛：{'、'.join(missing)}")
+        _add(result, "fail", f"CLAUDE.md 缺少规则/执行入口引用：{'、'.join(missing)}")
     else:
-        _add(result, "pass", "CLAUDE.md 已同步严格合力标签和真实仓权限门槛")
+        _add(result, "pass", "CLAUDE.md 引用唯一规则与项目skill，保留七项支撑工作流")
+
+    # 针对已发生的旧指令回流；这不是通用自然语言语义证明。
+    skill = _read_text(project_root / "skills/盘中/SKILL.md") or ""
+    display = _read_text(project_root / "docs/ggp_display_prompt.md") or ""
+    for phrase in ("直接出手（核心仓位）", "感觉单需双倍纪律", "clean 优先` →", "14:20 后（午后买点截止）不再扫描", "- 决策：买/空仓"):
+        if phrase in framework + claude + skill:
+            _add(result, "fail", f"现行文档重新出现已废弃指令：{phrase}")
+    if "七项支撑" not in display or "一句规则依据" in display:
+        _add(result, "fail", "ggp显示层未保留真实仓完整七项支撑")
+    if not skill or "../../选股框架.md" not in skill:
+        _add(result, "fail", "项目盘中skill缺失或未引用框架")
+    if not result["fail"]:
+        _add(result, "pass", "已知冲突短语未回流，显示层与项目入口保留规则引用")
 
     return result
 
@@ -166,7 +237,7 @@ def check_framework_progress(
     project_root: Path = PROJECT_ROOT,
     db: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, List[Dict[str, str]]]:
-    """将框架待验证项的 x/20 与影子库实际样本数对账。"""
+    """分别核对采集数和完整结算进度，未结算不得计入 x/20。"""
     result = _empty_result()
     framework = _read_text(project_root / "选股框架.md")
     if framework is None:
@@ -189,19 +260,17 @@ def check_framework_progress(
         if line is None:
             _add(result, "fail", f"选股框架缺少待验证项：{category}")
             continue
-        matches = re.findall(r"(?<!\d)(\d+)\s*/\s*(\d+)(?!\d)", line)
-        # 行内还会出现建立日期（例如 8/21）；按共享目标值选择真正的
-        # 样本进度字段，避免把日期误当成 x/20。
         configured_target = int(RULE_CONFIG["shadow"]["target_samples"])
-        match = next(
-            ((count, target) for count, target in matches if int(target) == configured_target),
-            None,
-        )
-        if not match:
-            _add(result, "fail", f"选股框架无法解析 {category} 的样本进度")
+        match = re.search(r"完整结算\s*(\d+)\s*/\s*(\d+)", line)
+        collected = re.search(r"已采集\s*(\d+)", line)
+        if not match or not collected:
+            _add(result, "fail", f"选股框架必须分开标注 {category} 的已采集数与完整结算进度")
             continue
-        reported_count, reported_target = int(match[0]), int(match[1])
-        actual_count = len(samples.get(category) or [])
+        reported_count, reported_target = int(match[1]), int(match[2])
+        rows = samples.get(category) or []
+        actual_count = sum(is_complete_shadow_result(row.get("t1_result")) for row in rows if isinstance(row, dict))
+        if int(collected[1]) != len(rows):
+            _add(result, "fail", f"{category} 采集数不一致：框架{collected[1]}，影子库{len(rows)}")
         if reported_count != actual_count or reported_target != configured_target:
             _add(
                 result,
@@ -214,7 +283,7 @@ def check_framework_progress(
             if db_target != configured_target:
                 _add(result, "fail", f"{category} 影子库目标值为 {db_target}，配置要求 {configured_target}")
             else:
-                _add(result, "pass", f"{category} 进度一致：{actual_count}/{configured_target}")
+                _add(result, "pass", f"{category} 完整结算进度一致：{actual_count}/{configured_target}，已采集{len(rows)}")
     return result
 
 
@@ -286,6 +355,7 @@ def check_code_wiring(project_root: Path = PROJECT_ROOT) -> Dict[str, List[Dict[
     paths = (
         project_root / "daily-stock-analysis" / "scripts" / "a_share_daily_screen.py",
         project_root / "tools" / "scan_reports.py",
+        project_root / "tools" / "verify_t1.py",
         project_root / "tools" / "shadow_tracker.py",
         project_root / "tools" / "detect_divergence_leader.py",
     )
@@ -297,6 +367,21 @@ def check_code_wiring(project_root: Path = PROJECT_ROOT) -> Dict[str, List[Dict[
             _add(result, "fail", f"关键运行文件未接入共享配置：{path.relative_to(project_root)}")
     if not result["fail"]:
         _add(result, "pass", "生产筛选、诊断、影子结算和分歧检测均已接入共享配置")
+
+    screen_text = _read_text(project_root / "daily-stock-analysis" / "scripts" / "a_share_daily_screen.py") or ""
+    if "RISK_CONFIG" not in screen_text:
+        _add(result, "fail", "生产筛选引擎未接入共享风险策略配置")
+    else:
+        _add(result, "pass", "生产筛选引擎已接入共享风险策略配置")
+
+    for relative in (Path("tools/scan_reports.py"), Path("tools/verify_t1.py")):
+        text = _read_text(project_root / relative) or ""
+        if re.search(r"^\s*TIME_WINDOWS\s*=", text, re.MULTILINE):
+            _add(result, "fail", f"{relative} 仍私自声明 TIME_WINDOWS")
+        elif relative.name == "verify_t1.py" and re.search(r"[\"'](?:0930|0945)[\"']", text):
+            _add(result, "fail", f"{relative} 仍硬编码 T+1 时刻")
+        else:
+            _add(result, "pass", f"{relative} 已从共享配置读取执行窗口")
 
     shadow_text = _read_text(project_root / "tools" / "shadow_tracker.py") or ""
     if 'super_lead == "✓(合力)"' not in shadow_text:
@@ -333,18 +418,17 @@ def check_authority_boundaries(project_root: Path = PROJECT_ROOT) -> Dict[str, L
 
 
 def check_active_skill(project_root: Path = PROJECT_ROOT) -> Dict[str, List[Dict[str, str]]]:
-    """提示已安装的活动 skill 与工作区副本是否存在差异。"""
+    """项目版为唯一入口；旧安装版不得重新启用。"""
     result = _empty_result()
     workspace_skill = project_root / "skills" / "盘中" / "SKILL.md"
     active_skill = Path.home() / ".codex" / "skills" / "盘中" / "SKILL.md"
     workspace_text = _read_text(workspace_skill)
-    active_text = _read_text(active_skill)
-    if workspace_text is None or active_text is None:
-        _add(result, "warn", "无法同时读取工作区与已安装盘中 skill，跳过版本对账")
-    elif workspace_text != active_text:
-        _add(result, "warn", "已安装盘中 skill 与工作区副本不同；当前以运行环境实际加载版本为准")
+    if workspace_text is None:
+        _add(result, "fail", "项目盘中skill不存在")
+    elif active_skill.exists():
+        _add(result, "fail", "已停用的安装版盘中skill重新出现，应仅使用项目入口")
     else:
-        _add(result, "pass", "已安装盘中 skill 与工作区副本一致")
+        _add(result, "pass", "仅项目盘中skill有效，旧安装版入口已停用")
     return result
 
 

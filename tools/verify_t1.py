@@ -8,9 +8,18 @@ T+1 纪律与样本验证工具
 import os
 import sys
 import argparse
+from pathlib import Path
 from typing import List, Dict, Any
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+TOOLS_DIR = Path(__file__).resolve().parent
+for import_path in (PROJECT_ROOT, TOOLS_DIR):
+    if str(import_path) not in sys.path:
+        sys.path.insert(0, str(import_path))
+
 from report_parser import parse_screening_report, get_report_files
 from query_quote import fetch_minute_data, fetch_realtime_quotes, normalize_code
+from tools.rule_config import RULE_CONFIG, normalize_hhmm
 
 BASE_REPORTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "筛选结果"))
 
@@ -20,16 +29,20 @@ def get_morning_945_price(code: str) -> Dict[str, Any]:
     if not m_lines:
         return {}
     
-    # 格式: HHMM price vol amount
+    # 格式: HHMM price vol amount；窗口与目标时刻统一来自共享配置。
+    t1_window = RULE_CONFIG["execution"]["t1_exit_window"]
+    window_start = normalize_hhmm(t1_window["start"])
+    window_end = normalize_hhmm(t1_window["end"])
+    target_time = normalize_hhmm(t1_window["target"])
     prices_morning = []
     price_945 = None
     for line in m_lines:
         parts = line.strip().split()
         if len(parts) >= 2:
-            t, p = parts[0], float(parts[1])
-            if "0930" <= t <= "0945":
+            t, p = normalize_hhmm(parts[0]), float(parts[1])
+            if window_start <= t <= window_end:
                 prices_morning.append(p)
-                if t == "0945":
+                if t == target_time:
                     price_945 = p
     
     if not price_945 and prices_morning:

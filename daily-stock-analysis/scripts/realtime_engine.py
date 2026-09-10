@@ -1217,7 +1217,7 @@ def run_screening(
                     "capital_rank", "trend_diagnostics", "low_ultra", "low_trend", "watchlist",
                 )
                 for row in (result.get(section) or [])
-                if screen._row_risk_status(row) == "unknown"
+                if screen._row_risk_status(row) == screen.RISK_UNKNOWN
             }
         )
         screen.apply_announcement_pool_gates(result)

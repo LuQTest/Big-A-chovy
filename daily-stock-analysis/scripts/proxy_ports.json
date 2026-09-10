@@ -1,0 +1,8 @@
+{
+  "_comment": "候选代理端口（按优先级）。换代理软件只改这一处：network_path.py 与 keep_proxy_alive.sh 都读本文件。",
+  "candidate_ports": [7890, 7897],
+  "_ports_note": {
+    "7890": "Clash Party (mihomo-party) mixed-port，当前主力",
+    "7897": "Clash Verge mixed-port，兼容兜底"
+  }
+}

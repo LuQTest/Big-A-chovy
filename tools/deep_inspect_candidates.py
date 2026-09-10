@@ -3,6 +3,9 @@
 import os, glob, re, json
 from tools.report_parser import parse_screening_report
 from tools.query_quote import fetch_realtime_quotes
+from tools.rule_config import RULE_CONFIG
+
+RISK_UNKNOWN = RULE_CONFIG["risk"]["statuses"]["unknown"]
 
 files = sorted(glob.glob("筛选结果/A股筛选结果_20260820_*.md"))
 files_1024 = [f for f in files if re.search(r"_(\d{4})\.md$", f) and re.search(r"_(\d{4})\.md$", f).group(1) >= "1024"]
@@ -49,7 +52,7 @@ for code in codes:
     super_lead_str = latest_r.get("超单主导", "-")
     pb_str = latest_r.get("高位回落", "-")
     vwap_str = latest_r.get("均价线", "-")
-    risk_str = latest_r.get("公告风控", "clean")
+    risk_str = latest_r.get("公告风控", RISK_UNKNOWN)
     plate_str = latest_r.get("板块", "-")
     
     # 解析主力净额数值用于排序

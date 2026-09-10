@@ -35,7 +35,12 @@ for import_path in (PROJECT_ROOT, TOOLS_DIR, SCRIPTS_DIR):
         sys.path.insert(0, str(import_path))
 
 from tools.report_parser import parse_screening_report, get_report_files
-from tools.rule_config import RULE_CONFIG, is_complete_shadow_result, shadow_targets
+from tools.rule_config import (
+    RULE_CONFIG,
+    hhmm_to_minutes,
+    is_complete_shadow_result,
+    shadow_targets,
+)
 
 SHADOW_DATA_DIR = Path(__file__).resolve().parent / "shadow_data"
 SHADOW_DB_FILE = SHADOW_DATA_DIR / "shadow_samples.json"
@@ -300,7 +305,7 @@ def calculate_t1_for_sample(sample: Dict[str, Any], t1_reports: List[str]) -> Op
     if trigger_price <= 0:
         return None
 
-    # 扫描次日所有快照，按与 09:45 (585 分钟) 的最小分钟差锁定 p_0945
+    # 扫描次日所有快照，按共享配置中的目标时刻锁定 T+1 目标价格。
     best_0945_diff = float("inf")
     p_0945 = None
     all_prices = []
@@ -312,12 +317,14 @@ def calculate_t1_for_sample(sample: Dict[str, Any], t1_reports: List[str]) -> Op
             t1_date = rep["date"]
             t_str = rep.get("time", "")
 
-            # 计算与配置的目标时刻（默认 09:45）的时间差
+            # 计算与配置目标时刻的时间差
             time_diff = float("inf")
             m = re.match(r"^(\d{1,2}):(\d{2})", t_str)
             if m:
                 h, mi = int(m.group(1)), int(m.group(2))
-                target_minute = int(RULE_CONFIG["shadow"]["t1_target_minute"])
+                target_minute = hhmm_to_minutes(
+                    RULE_CONFIG["execution"]["t1_exit_window"]["target"]
+                )
                 time_diff = abs((h * 60 + mi) - target_minute)
 
             for table_name, rows in rep.get("tables", {}).items():
@@ -475,7 +482,7 @@ def generate_report(db: Dict[str, Any]) -> str:
                                 if cat == "divergence"
                                 else f"协同评分:{s.get('score')} (+15分)"))
                 )
-                t1_res = s.get("t1_result", {})
+                t1_res = s.get("t1_result") or {}
                 t1_txt = t1_res.get("t1_0945_return_pct")
                 t1_disp = f"{t1_txt:+.2f}%" if t1_txt is not None else "-"
                 if t1_res.get("checked") and t1_res.get("extremes_complete") is True:

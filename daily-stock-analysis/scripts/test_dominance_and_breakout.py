@@ -207,6 +207,20 @@ class DominanceAndBreakoutTests(unittest.TestCase):
         self.assertEqual(dom_type, "none")
         self.assertEqual(label, "✗")
 
+    def test_coalition_rejects_even_small_decay_but_accepts_unchanged(self):
+        e = MagicMock()
+        e.code = "000001"
+        e.main_net, e.super_net, e.big_net = 60_000_000.0, 25_000_000.0, 35_000_000.0
+        e.flow_5m_inc, e.buy_ratio = 12_000_000.0, 1.6
+        for field in ("main_net", "super_net"):
+            with self.subTest(field=field):
+                previous = {"main_net": e.main_net, "super_net": e.super_net}
+                previous[field] *= 1.01  # 约1%的衰减也不能被旧10%容忍度放行。
+                history = {e.code: [previous, {"main_net": e.main_net, "super_net": e.super_net}]}
+                self.assertEqual(evaluate_dominance_type(e, history)[0], "none")
+        unchanged = {"main_net": e.main_net, "super_net": e.super_net}
+        self.assertEqual(evaluate_dominance_type(e, {e.code: [unchanged, unchanged]})[0], "coalition")
+
     def test_sector_boost_anchor_and_clean_requirement(self):
         """20亿锚点 + 3只共振 + clean 触发 sector_boost (+15分) 与 B类优选资格。"""
         def make_enriched(code, name, price, change, amount, industry, super_net, main_net, flow_5m_inc, high_pull=0.5, risk="clean"):

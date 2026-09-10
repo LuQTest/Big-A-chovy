@@ -47,6 +47,7 @@ from tools.rule_config import RULE_CONFIG  # noqa: E402
 
 # ---- 参数区（初值·影子期校准；改动需留痕）----
 DIVERGENCE_CONFIG = RULE_CONFIG["divergence"]
+RISK_AVOID = RULE_CONFIG["risk"]["statuses"]["avoid"]
 D1_MIN_MAINP = DIVERGENCE_CONFIG["min_main_pct_exclusive"]  # S1: 主力净占比下限
 D1_LOOKBACK = DIVERGENCE_CONFIG["lookback_snapshots"]        # S1: 回看快照数
 D1_RISE = DIVERGENCE_CONFIG["min_rise_pct"]                  # S1: 最小升幅（pct 点）
@@ -91,7 +92,7 @@ def evaluate_history(code, name, plate, snaps, date_str):
     snaps 须按时间升序；每个元素至少含：
     time, price, pull, vwap_up, mainp, xl, dom, amt, reso, n_sec, ann, report_file
     """
-    if any("avoid" in (s.get("ann") or "") for s in snaps):
+    if any(RISK_AVOID in (s.get("ann") or "") for s in snaps):
         return None
     seen_mainp = []
     for i, s in enumerate(snaps):

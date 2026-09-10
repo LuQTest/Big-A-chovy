@@ -24,6 +24,8 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import network_path  # 多路径实测延迟择优（直连+候选代理端口），软件无关
+
 # Auto-detect system proxy (bypasses IP bans on East Money API)
 def _list_proxy_candidates() -> list[str]:
     """Collect candidate proxy URLs (without testing connectivity).
@@ -185,10 +187,18 @@ def _detect_proxy() -> str | None:
     print("[dashboard] no working proxy found (East Money unreachable via any candidate)", file=sys.stderr)
     return None
 
-_detected_proxy_at_startup = _detect_proxy()
+_detected_proxy_at_startup = None
+# 启动即实测所有路径（直连+候选代理端口）延迟并缓存，不再依赖系统代理检测
+_startup_paths = network_path.warm_up()
+if _startup_paths:
+    print("[dashboard] network paths: " + ", ".join(
+        f"{p['label']}({p['latency_ms']:.0f}ms)" for p in _startup_paths), file=sys.stderr)
+else:
+    print("[dashboard] no working network path found at startup", file=sys.stderr)
 from urllib.parse import urlparse, parse_qs
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent
 STATIC_DIR = SCRIPT_DIR / "realtime_static"
 PORT = 8765
 # 单次筛选硬超时（秒）。健康刷新通常 5~10s（K线走缓存）；若代理在筛选中途掉线，
@@ -198,7 +208,7 @@ SCREENING_TIMEOUT = 120
 # 代理断开时，用更短的轮询间隔探测恢复（正常刷新间隔是 settings["interval"]=90s）。
 # 你一旦把代理弄通，看板约 20s 内自动恢复，不用干等一整轮。
 PROXY_RECOVERY_INTERVAL = 15
-MD_OUTPUT_DIR = Path("/Users/luqiang/Documents/Others/股票/筛选结果")
+MD_OUTPUT_DIR = PROJECT_ROOT / "筛选结果"
 # 持久化最近一次「有效完整」结果，供非交易时段保留快照 / 跨重启恢复
 LAST_VALID_RESULT_PATH = SCRIPT_DIR / "last_valid_result.json"
 
@@ -220,9 +230,9 @@ def is_trading_hours() -> bool:
 
 
 def _inject_proxy_to_session() -> None:
-    """Re-detect proxy from scutil each time and inject into REQUESTS_SESSION.
-    This ensures proxy changes (turned on/off mid-session) are picked up."""
-    proxy_url = _detect_proxy()  # fresh detection every run
+    """把实测最快的代理路径注入 REQUESTS_SESSION；最优为直连（或全不通）时清掉代理。
+    路径由 network_path 实测决定，不依赖 scutil / 任何代理软件。"""
+    proxy_url = network_path.best_proxy_url()  # 实测最快；直连最优时为 None
     if not proxy_url:
         # No proxy available — clear any stale proxy from sessions
         try:
@@ -267,7 +277,7 @@ class ScreeningScheduler:
         self.settings = {
             "skip_announcements": False,
             "skip_capital_ranking": False,
-            "network_mode": "proxy",
+            "network_mode": "auto",
             "auto_refresh": True,
             "auto_shutdown": True,
             "interval": 90,
@@ -289,11 +299,9 @@ class ScreeningScheduler:
             return False
         try:
             self.is_running = True
-            # Fast-fail when no working proxy: East Money blocks direct
-            # connections, so screening without a proxy just hangs on timeouts
-            # (~minute per run) for nothing. Preserve the last snapshot and
-            # surface a clear "proxy unavailable" status instead.
-            if not _detect_proxy():
+            # 快速失败条件：直连和所有候选代理都拿不到东财数据（network_path 实测）。
+            # 直连可用时不再依赖代理；避免全网断开时空耗一轮超时。
+            if not network_path.has_working_path():
                 self.proxy_unavailable = True
                 prev = self.latest_result
                 prev_meta = (prev or {}).get("meta", {})
@@ -302,9 +310,9 @@ class ScreeningScheduler:
                     self.preserved_from = prev_meta.get("timestamp")
                     self.last_run_time = datetime.now()
                     self.last_run_duration = 0.0
-                    print("[dashboard] no working proxy; preserving last snapshot", file=sys.stderr)
+                    print("[dashboard] no working network path; preserving last snapshot", file=sys.stderr)
                     return True
-                print("[dashboard] no working proxy and no valid snapshot to preserve", file=sys.stderr)
+                print("[dashboard] no working network path and no valid snapshot to preserve", file=sys.stderr)
                 return False
             self.proxy_unavailable = False
             _inject_proxy_to_session()
