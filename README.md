@@ -39,6 +39,23 @@ python3 -m pip install -r requirements.txt
 
 `requests` 用于更稳定地访问行情接口；`pyyaml` 用于读取决策记录中的持仓快照。没有这些库时，部分功能仍可使用，但网络或 YAML 解析能力可能降级。
 
+### Web 工作台（B/S 架构，推荐 Windows 用户使用）
+
+不想受限于 macOS GUI？启动 Web 工作台，在浏览器里使用筛选、报告库和工具箱：
+
+```bash
+# Windows：双击根目录 启动工作台.bat，或：
+uv run --python 3.13 --with requests --with pyyaml --with tzdata python daily-stock-analysis/scripts/web_workbench.py
+
+# macOS / Linux
+python3 daily-stock-analysis/scripts/web_workbench.py
+```
+
+- 工作台：<http://localhost:8765/workbench>（一次性筛选 + 报告库 + 行情/基本面/持仓/T+1 工具箱）
+- 实时看板：<http://localhost:8765/>（原版页面不变）
+
+详细说明见 [`docs/web-workbench.md`](docs/web-workbench.md)。
+
 ### Docker 部署（公开仓库）
 
 仓库提供一个不依赖 macOS GUI 的实时看板容器。源码、Docker 配置和 GitHub Actions 可以公开发布；报告、决策记录、持仓、影子样本和运行缓存仍保留在本机挂载目录，不会写入镜像。
