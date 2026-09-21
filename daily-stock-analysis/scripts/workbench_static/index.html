@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A股 Web 工作台</title>
+<link rel="stylesheet" href="/workbench.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <h1>A股 Web 工作台</h1>
+    <span id="server-status" class="status-badge">连接中...</span>
+    <span id="clock" class="meta-text"></span>
+  </div>
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="screen">筛选工作台</button>
+    <button class="tab-btn" data-tab="reports">报告库</button>
+    <button class="tab-btn" data-tab="tools">工具箱</button>
+    <a class="tab-btn tab-link" href="/" target="_blank" rel="noopener">实时看板 ↗</a>
+  </nav>
+</header>
+
+<main>
+  <!-- ============ 筛选工作台 ============ -->
+  <section id="tab-screen" class="tab-panel active">
+    <div class="card">
+      <h2>一次性筛选任务</h2>
+      <p class="hint">与实时看板共用同一条筛选管线；任务在服务器后台执行，完成后自动保存报告到 筛选结果/。同一时刻只允许一个任务（与看板自动刷新互斥）。<b>首次运行（K线缓存冷）可能需要数分钟</b>，之后命中缓存会快很多。</p>
+      <div class="form-row">
+        <fieldset class="inline">
+          <legend>筛选模块</legend>
+          <label class="toggle"><input type="checkbox" id="mode-strict" checked> 严格双池</label>
+          <label class="toggle"><input type="checkbox" id="mode-low" checked> 低吸池</label>
+          <label class="toggle"><input type="checkbox" id="mode-watchlist" checked> 明日观察池</label>
+        </fieldset>
+        <label>输出条数 <input type="number" id="top" value="15" min="3" max="50" class="num"></label>
+        <label>网络模式
+          <select id="network-mode">
+            <option value="auto" selected>auto（实测择优）</option>
+            <option value="direct">direct（强制直连）</option>
+            <option value="proxy">proxy（仅代理）</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label class="toggle"><input type="checkbox" id="skip-announcements"> 跳过公告检查（不建议）</label>
+        <label class="toggle"><input type="checkbox" id="skip-capital"> 跳过资金排名</label>
+        <button id="run-btn" class="btn btn-primary">▶ 开始筛选</button>
+        <span id="job-state" class="meta-text"></span>
+      </div>
+      <div id="job-progress" class="progress hidden"><div class="bar"></div></div>
+      <p class="hint" id="job-progress-hint" style="display:none">筛选进行中，行情分页 → K线增强 → 资金/公告检查依次执行；冷缓存首次运行较慢，请耐心等待</p>
+    </div>
+
+    <div id="screen-summary" class="summary hidden"></div>
+    <div id="screen-result" class="md-view hidden"></div>
+  </section>
+
+  <!-- ============ 报告库 ============ -->
+  <section id="tab-reports" class="tab-panel">
+    <div class="card">
+      <div class="form-row spread">
+        <h2>筛选报告库 <span id="reports-count" class="meta-text"></span></h2>
+        <button id="reports-refresh" class="btn">刷新列表</button>
+      </div>
+      <div id="reports-table" class="table-wrap"></div>
+    </div>
+    <div id="report-viewer" class="hidden">
+      <div class="form-row spread">
+        <button id="report-back" class="btn">← 返回列表</button>
+        <span id="report-title" class="meta-text"></span>
+      </div>
+      <div id="report-content" class="md-view"></div>
+    </div>
+  </section>
+
+  <!-- ============ 工具箱 ============ -->
+  <section id="tab-tools" class="tab-panel">
+    <div class="tools-grid">
+      <div class="card">
+        <h2>实时行情 / 五档</h2>
+        <div class="form-row">
+          <input type="text" id="quote-codes" placeholder="代码，逗号分隔：600188, 000768" class="grow">
+          <label class="toggle"><input type="checkbox" id="quote-minute"> 分时</label>
+          <label class="toggle"><input type="checkbox" id="quote-kline"> 日K</label>
+          <button class="btn btn-primary" id="quote-btn">查询</button>
+        </div>
+        <div id="quote-out" class="tool-out"></div>
+      </div>
+
+      <div class="card">
+        <h2>基本面查询（建仓前必验）</h2>
+        <div class="form-row">
+          <input type="text" id="fin-code" placeholder="股票代码：600188" class="grow">
+          <button class="btn btn-primary" id="fin-btn">查询</button>
+        </div>
+        <div id="fin-out" class="tool-out"></div>
+      </div>
+
+      <div class="card">
+        <h2>报告扫描（5/5 与 4/5 判定）</h2>
+        <div class="form-row">
+          <label>日期 <input type="text" id="scan-date" placeholder="YYYYMMDD，可空" class="num"></label>
+          <label>最新 <input type="number" id="scan-latest" value="5" min="1" max="30" class="num"></label>
+          <button class="btn btn-primary" id="scan-btn">扫描</button>
+        </div>
+        <div id="scan-out" class="tool-out"></div>
+      </div>
+
+      <div class="card">
+        <h2>持仓 / 观察池快照</h2>
+        <div class="form-row">
+          <label>日期 <input type="text" id="pos-date" placeholder="YYYYMMDD，默认最新" class="num"></label>
+          <button class="btn btn-primary" id="pos-btn">读取</button>
+        </div>
+        <div id="pos-out" class="tool-out"></div>
+      </div>
+
+      <div class="card">
+        <h2>T+1 观察池验证</h2>
+        <div class="form-row">
+          <label>日期 <input type="text" id="t1-date" placeholder="YYYYMMDD（必填）" class="num"></label>
+          <button class="btn btn-primary" id="t1-btn">验证</button>
+        </div>
+        <div id="t1-out" class="tool-out"></div>
+      </div>
+
+      <div class="card">
+        <h2>单股全天跟踪</h2>
+        <div class="form-row">
+          <input type="text" id="track-code" placeholder="代码或名称" class="grow">
+          <label>日期 <input type="text" id="track-date" placeholder="YYYYMMDD，可空" class="num"></label>
+          <button class="btn btn-primary" id="track-btn">跟踪</button>
+        </div>
+        <div id="track-out" class="tool-out"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot meta-text">
+  筛选结果只是发现候选，不构成买卖建议；交易规则以《选股框架.md》为准，不会自动下单。
+</footer>
+
+<script src="/workbench.js"></script>
+</body>
+</html>
