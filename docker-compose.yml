@@ -3,7 +3,9 @@ services:
     build:
       context: .
     ports:
-      - "${DASHBOARD_PORT:-8765}:8765"
+      # Bind to localhost by default: the workbench can display private
+      # reports and position snapshots. Override explicitly only on a trusted LAN.
+      - "127.0.0.1:${DASHBOARD_PORT:-8765}:8765"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       PYTHONUNBUFFERED: "1"

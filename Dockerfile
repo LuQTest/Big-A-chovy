@@ -43,4 +43,6 @@ EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/status', timeout=4)"
 
-CMD ["python", "daily-stock-analysis/scripts/realtime_dashboard.py"]
+# The workbench includes the original dashboard routes at / and adds
+# /workbench plus the toolbox APIs on the same port.
+CMD ["python", "daily-stock-analysis/scripts/web_workbench.py", "--host", "0.0.0.0", "--no-browser"]

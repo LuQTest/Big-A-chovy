@@ -54,18 +54,26 @@ python3 daily-stock-analysis/scripts/web_workbench.py
 - 工作台：<http://localhost:8765/workbench>（一次性筛选 + 报告库 + 行情/基本面/持仓/T+1 工具箱）
 - 实时看板：<http://localhost:8765/>（原版页面不变）
 
+Web 工作台默认只监听本机，避免报告、持仓和决策快照被局域网读取。确实需要手机或其他电脑访问时，显式运行：
+
+```bash
+python3 daily-stock-analysis/scripts/web_workbench.py --host 0.0.0.0
+```
+
+这会开放包含个人数据的接口，只应在可信局域网使用，禁止直接暴露到公网。
+
 详细说明见 [`docs/web-workbench.md`](docs/web-workbench.md)。
 
 ### Docker 部署（公开仓库）
 
-仓库提供一个不依赖 macOS GUI 的实时看板容器。源码、Docker 配置和 GitHub Actions 可以公开发布；报告、决策记录、持仓、影子样本和运行缓存仍保留在本机挂载目录，不会写入镜像。
+仓库提供一个不依赖 macOS GUI 的 Web 工作台与实时看板容器。源码、Docker 配置和 GitHub Actions 可以公开发布；报告、决策记录、持仓、影子样本和运行缓存仍保留在本机挂载目录，不会写入镜像。
 
 ```bash
 cp .env.example .env       # 不需要代理时也可以跳过
 docker compose up -d --build
 ```
 
-浏览器打开 <http://localhost:8765>，查看状态或日志：
+浏览器打开 <http://localhost:8765/workbench> 使用工作台，打开 <http://localhost:8765/> 查看实时看板；查看状态或日志：
 
 ```bash
 docker compose ps
@@ -80,7 +88,7 @@ HTTP_PROXY=http://host.docker.internal:7890
 HTTPS_PROXY=http://host.docker.internal:7890
 ```
 
-Docker 运行版只启动实时看板，不启动 Finder、macOS `.command` 启动器或桌面 GUI；它同样不会自动下单。发布标签会由 GitHub Actions 构建并发布多架构镜像到 GitHub Container Registry；如果首次发布后镜像仍是私有的，需要在 GitHub Packages 中将其改为 Public。
+Docker 运行版同时启动 Web 工作台和实时看板，不启动 Finder、macOS `.command` 启动器或桌面 GUI；宿主机端口默认只绑定 `127.0.0.1`，需要局域网访问时应明确修改 compose 端口映射并确认网络可信。它同样不会自动下单。发布标签会由 GitHub Actions 构建并发布多架构镜像到 GitHub Container Registry；如果首次发布后镜像仍是私有的，需要在 GitHub Packages 中将其改为 Public。
 
 ```bash
 docker pull ghcr.io/luqtest/big-a-chovy:v0.4.0-docker.1

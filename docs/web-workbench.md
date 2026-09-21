@@ -1,6 +1,6 @@
 # Web 工作台（B/S 架构）使用说明
 
-> 把 FOR-BIG-A 的筛选、看板、报告和工具能力全部搬到浏览器：一台机器起服务，局域网内任何设备（Windows / macOS / Linux / 手机平板）用浏览器操作。**仍然不会自动下单**，规则以《选股框架.md》为准。
+> 把 FOR-BIG-A 的筛选、看板、报告和工具能力搬到浏览器：默认仅本机访问；如确实需要局域网设备访问，可显式绑定局域网地址。**仍然不会自动下单**，规则以《选股框架.md》为准。
 
 ## 架构
 
@@ -18,7 +18,7 @@
 
 - 后端：Python 标准库 `http.server`，复用看板已验证的 `realtime_engine` 管线（含 `network_path` 直连/代理实测择优）。
 - 前端：原生 HTML/JS/CSS，无外部 CDN 依赖，离线可用；与实时看板同一套 Catppuccin 配色。
-- 单端口 8765 同时提供工作台与原版实时看板，原有看板 API（`/api/data`、`/api/status` 等）完全不变，Docker 部署不受影响。
+- 单端口 8765 同时提供工作台与原版实时看板，原有看板 API（`/api/data`、`/api/status` 等）完全不变；Docker 也通过工作台入口提供两套页面。
 
 ## 快速开始
 
@@ -38,9 +38,11 @@ uv run --python 3.13 --with requests --with pyyaml --with tzdata python daily-st
 python3 daily-stock-analysis/scripts/web_workbench.py
 ```
 
-### Docker（实时看板原路径不变）
+### Docker（工作台与实时看板共用端口）
 
-原 `docker-compose.yml` 启动的看板镜像不受影响；工作台与看板同源同端口，随镜像一起发布。
+`docker-compose.yml` 启动工作台与实时看板，原有看板路径不变。宿主机端口默认只绑定 `127.0.0.1`，避免把报告和持仓快照暴露到局域网。
+
+如确实需要局域网访问，请先确认网络可信，再把 compose 端口映射改为 `8765:8765`，不要把端口直接暴露到公网。
 
 浏览器打开：
 
@@ -67,7 +69,7 @@ python3 daily-stock-analysis/scripts/web_workbench.py
 | GET | `/api/wb/reports` | 报告列表（按修改时间倒序） |
 | GET | `/api/wb/md?path=` | 读取单份报告（限制在 `筛选结果/` 内，防路径穿越） |
 | GET | `/api/wb/quote?codes=&minute=&kline=` | 行情/分时/日K |
-| GET | `/api/wb/scan?date=&latest=&file=` | 报告扫描 |
+| GET | `/api/wb/scan?date=&latest=&file=` | 报告扫描；`file` 只能指向 `筛选结果/` 下的 Markdown |
 | GET | `/api/wb/position?date=` | 持仓/观察池快照 |
 | GET | `/api/wb/verify_t1?date=` | T+1 验证 |
 | GET | `/api/wb/track?code=&date=` | 单股跟踪 |
@@ -77,8 +79,9 @@ python3 daily-stock-analysis/scripts/web_workbench.py
 
 - 手动筛选任务与看板自动刷新**共用同一把筛选锁**，同一时刻只有一个引擎在跑，避免模块级数据竞争。
 - 筛选超时（900s）不会杀死引擎线程（Python 无法杀线程），而是进入「僵尸收割」：锁由收割线程等引擎真正结束后释放，期间新任务返回明确的 busy 原因。
-- 报告读取严格限制在 `筛选结果/` 目录内；查询参数支持 UTF-8 与 GBK 双编码解码（兼容 Windows 中文命令行客户端）。
-- 报告、持仓、决策记录仍只保存在本机，不会写入镜像或上传 GitHub（`.gitignore` 原样生效）。
+- 报告读取和报告扫描严格限制在 `筛选结果/` 目录内，并拒绝符号链接越界；查询参数支持 UTF-8 与 GBK 双编码解码（兼容 Windows 中文命令行客户端）。
+- 工作台默认监听 `127.0.0.1`，不发送通配符 CORS；带 `Origin` 的跨源 API 请求会被拒绝。
+- 报告、持仓、决策记录仍只保存在本机，不会自动写入镜像或上传 GitHub（`.gitignore` 原样生效）；但工作台页面会按请求把这些本地数据展示给当前浏览器，因此不要在不可信网络使用 `--host 0.0.0.0`。
 
 ## Windows 性能注意（实测）
 

@@ -35,7 +35,7 @@ import webbrowser
 from datetime import datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, unquote
 
 
 def _smart_unquote(s: str) -> str:
@@ -240,7 +240,8 @@ class ScreenJob:
             stamp = datetime.now().strftime("%Y%m%d_%H%M")
             path = REPORTS_DIR / f"A股筛选结果_{stamp}.md"
             path.write_text(md, encoding="utf-8")
-            self.md_path = str(path)
+            # API 只返回项目内相对路径，避免把本机用户名/绝对路径暴露给浏览器。
+            self.md_path = str(path.relative_to(PROJECT_ROOT))
             dash.scheduler.latest_md_path = str(path)
             print(f"[workbench] markdown saved: {path}", file=sys.stderr)
         except Exception as e:  # noqa: BLE001
@@ -301,9 +302,9 @@ def _tool_scan(date: str | None, latest: int, file: str | None) -> dict:
     from tools.report_parser import get_report_files
 
     if file:
-        p = Path(file)
-        if not p.is_absolute():
-            p = PROJECT_ROOT / file
+        p = _resolve_report_path(file)
+        if p is None:
+            return {"error": "file 参数只允许访问 筛选结果/ 下的 Markdown 报告"}
         files = [p]
     else:
         files = get_report_files(str(REPORTS_DIR), date) or []
@@ -320,7 +321,10 @@ def _tool_scan(date: str | None, latest: int, file: str | None) -> dict:
                 "near_4": res.get("near_4", []),
             })
         except Exception as e:  # noqa: BLE001
-            results.append({"file": str(f), "error": f"{type(e).__name__}: {e}"})
+            results.append({
+                "file": str(f.relative_to(PROJECT_ROOT)),
+                "error": f"{type(e).__name__}: {e}",
+            })
     return {"count": len(results), "results": results}
 
 
@@ -330,7 +334,11 @@ def _tool_position(date: str | None) -> dict:
     if not fpath:
         return {"error": f"未找到决策记录文件: date={date}", "found": False}
     snap = load_position_snapshot(fpath)
-    return {"found": True, "file": str(fpath), "snapshot": snap}
+    try:
+        display_path = str(Path(fpath).resolve().relative_to(PROJECT_ROOT))
+    except ValueError:
+        display_path = Path(fpath).name
+    return {"found": True, "file": display_path, "snapshot": snap}
 
 
 def _tool_verify_t1(date: str) -> dict:
@@ -361,7 +369,51 @@ def _sanitize_json(obj):
     return dash._sanitize_json(obj)
 
 
+def _resolve_report_path(rel: str) -> Path | None:
+    """Resolve a report path without allowing absolute paths or symlink escape."""
+    if not rel or not rel.strip():
+        return None
+    raw = rel.strip()
+    p = (PROJECT_ROOT / raw).resolve()
+    try:
+        p.relative_to(REPORTS_DIR.resolve())
+    except ValueError:
+        return None
+    if p.suffix.lower() != ".md":
+        return None
+    return p
+
+
 class WorkbenchHandler(dash.DashboardHandler):
+
+    def _same_origin_request(self) -> bool:
+        """Allow browser API calls only from the page's own origin.
+
+        The workbench serves private local reports and position snapshots.  A
+        wildcard CORS header would let an unrelated webpage read those values
+        from localhost, so cross-origin browser requests are rejected.
+        Command-line clients without an Origin header remain supported.
+        """
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        try:
+            parsed = urlparse(origin)
+        except ValueError:
+            return False
+        return parsed.scheme in {"http", "https"} and parsed.netloc.lower() == self.headers.get(
+            "Host", ""
+        ).lower()
+
+    def _reject_cross_origin(self) -> bool:
+        if self._same_origin_request():
+            return False
+        self.send_error(403, "Cross-origin requests are disabled")
+        return True
+
+    def _send_cors_headers(self) -> None:
+        """Do not emit the inherited wildcard CORS policy."""
+        self.send_header("X-Content-Type-Options", "nosniff")
 
     # -- 静态资源 ----------------------------------------------------------
     def _serve_workbench_static(self, filename: str) -> None:
@@ -431,6 +483,10 @@ class WorkbenchHandler(dash.DashboardHandler):
         if REPORTS_DIR.exists():
             for p in REPORTS_DIR.rglob("*.md"):
                 try:
+                    resolved = p.resolve()
+                    resolved.relative_to(REPORTS_DIR.resolve())
+                    if not resolved.is_file():
+                        continue
                     st = p.stat()
                     files.append({
                         "path": str(p.relative_to(PROJECT_ROOT)),
@@ -447,18 +503,12 @@ class WorkbenchHandler(dash.DashboardHandler):
         if not rel:
             self._serve_json({"error": "缺少 path 参数"})
             return
-        rel = rel.strip()
-        p = (PROJECT_ROOT / rel).resolve()
-        try:
-            p.relative_to(REPORTS_DIR.resolve())
-        except ValueError:
-            self._serve_json({
-                "error": "路径越界：只允许访问 筛选结果/ 下的报告",
-                "debug": {"rel": repr(rel), "p": str(p), "base": str(REPORTS_DIR.resolve())},
-            })
+        p = _resolve_report_path(rel)
+        if p is None:
+            self._serve_json({"error": "路径越界：只允许访问 筛选结果/ 下的 Markdown 报告"})
             return
-        if not p.exists():
-            self._serve_json({"error": f"文件不存在: {rel}"})
+        if not p.is_file():
+            self._serve_json({"error": "文件不存在或不是普通文件"})
             return
         try:
             self._serve_text(p.read_text(encoding="utf-8"), "text/markdown; charset=utf-8")
@@ -468,6 +518,8 @@ class WorkbenchHandler(dash.DashboardHandler):
     def do_GET(self) -> None:  # noqa: D102
         parsed = urlparse(self.path)
         path = parsed.path
+        if path.startswith("/api/") and self._reject_cross_origin():
+            return
         if path == "/workbench" or path == "/workbench.html":
             self._serve_workbench_static("index.html")
         elif path == "/workbench.js":
@@ -482,6 +534,8 @@ class WorkbenchHandler(dash.DashboardHandler):
 
     def do_POST(self) -> None:  # noqa: D102
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/") and self._reject_cross_origin():
+            return
         if parsed.path == "/api/wb/screen/run":
             length = int(self.headers.get("Content-Length", 0))
             try:
@@ -493,6 +547,11 @@ class WorkbenchHandler(dash.DashboardHandler):
         else:
             super().do_POST()
 
+    def do_OPTIONS(self) -> None:  # noqa: D102
+        if self._reject_cross_origin():
+            return
+        super().do_OPTIONS()
+
 
 # ---------------------------------------------------------------------------
 # 入口
@@ -501,11 +560,22 @@ def main() -> int:
     _ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="A股 B/S 网络工作台")
     parser.add_argument("--port", type=int, default=dash.PORT)
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="监听地址，默认仅本机访问；需要局域网访问时显式指定 0.0.0.0",
+    )
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     parser.add_argument("--no-dashboard-refresh", action="store_true",
                         help="不启动看板盘中自动刷新/预热（纯手动筛选模式，适合低配机或非交易时段）")
     args = parser.parse_args()
+
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        print(
+            "[workbench] WARNING: non-loopback host exposes reports and position "
+            "snapshots to the network; use only on a trusted LAN",
+            file=sys.stderr,
+        )
 
     # Windows 下 lsof 不存在，用 netstat 清理残留端口
     if sys.platform == "win32":
