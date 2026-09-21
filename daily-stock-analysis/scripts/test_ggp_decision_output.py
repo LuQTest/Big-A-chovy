@@ -13,7 +13,7 @@ from tools.validate_ggp_output import validate
 
 class DecisionOutputTests(unittest.TestCase):
     def setUp(self):
-        prompt = (ROOT / 'docs/ggp_prompt.md').read_text()
+        prompt = (ROOT / 'docs/ggp_prompt.md').read_text(encoding="utf-8")
         self.obj = json.loads(prompt.split('```json\n', 1)[1].split('```', 1)[0])
         self.candidate = {
             'code': '000001', 'name': '测试标的', 'source': 'state_machine',

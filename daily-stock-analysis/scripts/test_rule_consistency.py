@@ -107,15 +107,15 @@ class RuleConsistencyTests(unittest.TestCase):
     def test_progress_uses_completed_results_not_collected_signals(self):
         db = {"targets": shadow_targets(), "samples": {key: [] for key in shadow_targets()}}
         db["samples"]["coalition"] = [{"t1_result": None} for _ in range(4)]
-        text = (PROJECT_ROOT / "选股框架.md").read_text()
+        text = (PROJECT_ROOT / "选股框架.md").read_text(encoding="utf-8")
         # 用实际文档结构构造4条未结算信号，正确完成数为0。
         db["samples"]["divergence"] = [{"t1_result": None} for _ in range(4)]
         text = text.replace("已采集4；完整结算1/20", "已采集4；完整结算0/20")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "选股框架.md").write_text(text)
+            (root / "选股框架.md").write_text(text, encoding="utf-8")
             self.assertFalse(check_framework_progress(root, db)["fail"])
-            (root / "选股框架.md").write_text(text.replace("已采集4；完整结算0/20", "已采集4；完整结算4/20"))
+            (root / "选股框架.md").write_text(encoding="utf-8", data=text.replace("已采集4；完整结算0/20", "已采集4；完整结算4/20"))
             self.assertTrue(check_framework_progress(root, db)["fail"])
 
     def test_current_workspace_has_no_consistency_failures(self):
