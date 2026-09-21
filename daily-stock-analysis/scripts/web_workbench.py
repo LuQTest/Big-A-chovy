@@ -322,7 +322,7 @@ def _tool_scan(date: str | None, latest: int, file: str | None) -> dict:
             })
         except Exception as e:  # noqa: BLE001
             results.append({
-                "file": str(f.relative_to(PROJECT_ROOT)),
+                "file": _display_project_path(f),
                 "error": f"{type(e).__name__}: {e}",
             })
     return {"count": len(results), "results": results}
@@ -334,11 +334,7 @@ def _tool_position(date: str | None) -> dict:
     if not fpath:
         return {"error": f"未找到决策记录文件: date={date}", "found": False}
     snap = load_position_snapshot(fpath)
-    try:
-        display_path = str(Path(fpath).resolve().relative_to(PROJECT_ROOT))
-    except ValueError:
-        display_path = Path(fpath).name
-    return {"found": True, "file": display_path, "snapshot": snap}
+    return {"found": True, "file": _display_project_path(fpath), "snapshot": snap}
 
 
 def _tool_verify_t1(date: str) -> dict:
@@ -367,6 +363,14 @@ def _tool_financials(code: str) -> dict:
 # ---------------------------------------------------------------------------
 def _sanitize_json(obj):
     return dash._sanitize_json(obj)
+
+
+def _display_project_path(path: str | Path) -> str:
+    """Return a stable project-relative path without leaking local prefixes."""
+    try:
+        return str(Path(path).resolve().relative_to(PROJECT_ROOT))
+    except ValueError:
+        return Path(path).name
 
 
 def _resolve_report_path(rel: str) -> Path | None:
