@@ -614,6 +614,8 @@ def main() -> int:
         print(f"[workbench] 端口 {args.port} 被占用（{e}）。请先停掉旧进程："
               f" web_workbench.py --port {args.port + 1}", file=sys.stderr)
         return 1
+    # 接通调度器的收盘 auto-shutdown：它停的是 dash._server 指向的实例
+    dash._server = server
 
     if args.no_dashboard_refresh:
         print("[workbench] dashboard auto-refresh disabled (--no-dashboard-refresh)", file=sys.stderr)
