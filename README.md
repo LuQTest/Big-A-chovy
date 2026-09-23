@@ -1,3 +1,5 @@
+> **重要通知**：目前行情数据接口访问受限，现有版本可能无法正常获取行情数据。你可以下载项目源码，自行接入合适的付费行情接口。后续会继续适配并发布新版本，届时会在 GitHub Releases 和本 README 更新说明。
+
 # A 股量化筛选工作台
 
 [![Latest preview release](https://img.shields.io/github/v/release/LuQTest/Big-A-chovy?include_prereleases&label=latest%20preview&style=flat-square)](https://github.com/LuQTest/Big-A-chovy/releases)
