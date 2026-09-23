@@ -293,6 +293,25 @@ def is_trading_hours() -> bool:
     return False
 
 
+def _sina_reachable() -> bool:
+    """东财全灭时的备用源轻量探测（num=1，亚秒级）。
+
+    network_path 只探测东财端点，其判定不能代表独立备用源（新浪）的可达性：
+    东财对行情接口做 IP 风控返回空数据时，新浪通常仍可用，此时引擎内部的
+    新浪降级链路（fetch_sina_market → _normalize_sina_row）还能出基础数据。"""
+    import a_share_daily_screen as screen
+    try:
+        data = screen.fetch_json(
+            screen.SINA_MARKET_URL,
+            {"page": 1, "num": 1, "sort": "symbol", "asc": 1,
+             "node": "hs_a", "_s_r_a": "page"},
+            timeout=4,
+        )
+        return isinstance(data, list) and len(data) > 0
+    except Exception:
+        return False
+
+
 def _inject_proxy_to_session() -> None:
     """把实测最快的代理路径注入 REQUESTS_SESSION；最优为直连（或全不通）时清掉代理。
     路径由 network_path 实测决定，不依赖 scutil / 任何代理软件。"""
@@ -363,9 +382,11 @@ class ScreeningScheduler:
             return False
         try:
             self.is_running = True
-            # 快速失败条件：直连和所有候选代理都拿不到东财数据（network_path 实测）。
-            # 直连可用时不再依赖代理；避免全网断开时空耗一轮超时。
-            if not network_path.has_working_path():
+            # 快速失败条件：直连和所有候选代理都拿不到东财数据（network_path 实测），
+            # 且独立备用源（新浪）也不可达。东财被风控时新浪仍可用，引擎内部的
+            # 新浪降级链路（fetch_sina_market）能继续出基础数据；只有全网断开才空耗，
+            # 保留作者防断网空耗一轮超时的初衷。
+            if not network_path.has_working_path() and not _sina_reachable():
                 self.proxy_unavailable = True
                 prev = self.latest_result
                 prev_meta = (prev or {}).get("meta", {})
