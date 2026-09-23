@@ -156,3 +156,27 @@ class NetworkDiagnosticsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SinaReachableTests(unittest.TestCase):
+    def _load(self):
+        import realtime_dashboard as dash
+        return dash
+
+    @patch("a_share_daily_screen.fetch_json")
+    def test_sina_reachable_true_on_data(self, fetch_json):
+        dash = self._load()
+        fetch_json.return_value = [{"symbol": "sh600000"}]
+        self.assertTrue(dash._sina_reachable())
+
+    @patch("a_share_daily_screen.fetch_json")
+    def test_sina_reachable_false_on_exception(self, fetch_json):
+        dash = self._load()
+        fetch_json.side_effect = RuntimeError("network down")
+        self.assertFalse(dash._sina_reachable())
+
+    @patch("a_share_daily_screen.fetch_json")
+    def test_sina_reachable_false_on_empty_payload(self, fetch_json):
+        dash = self._load()
+        fetch_json.return_value = []
+        self.assertFalse(dash._sina_reachable())
