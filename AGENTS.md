@@ -65,7 +65,7 @@ curl -s "https://qt.gtimg.cn/q=sh601615" | iconv -f GBK -t UTF-8   # 实时行�
 - `筛选结果/20260825/` 子目录缺失：当日 156 份报告仍平铺在 `筛选结果/` 根目录。不带日期参数的默认扫描（如 `scan_reports.py --latest`）会命中 8/25 而非最新交易日——盘中取报告务必先确定目标日期。
 - 网络路径已改为**代码内实测择优**（2026-09-09，方案 C）：`daily-stock-analysis/scripts/network_path.py` 并发实测「直连 + 本机候选代理端口（来自 `proxy_ports.json` 的 `candidate_ports`，默认 7890/7897）+ 环境代理 + 系统代理」的真实东财接口延迟，最快路径优先，**彻底不依赖系统代理/任何代理软件**；直连若被限速会自动让位给代理，反之亦然。看板默认 `network_mode=auto`，不再因无代理而放弃筛选。诊断：`python3 daily-stock-analysis/scripts/network_path.py`。
   - **配置唯一来源**：`proxy_ports.json` 的 `candidate_ports`，`network_path.py` 与 `keep_proxy_alive.sh` 共用——**换代理软件只改这一处**（旧版硬编码 7897 并 `open -a "Clash Verge"` 会与新软件争夺系统代理、关掉 Verge 就断网，已废弃）。
-  - **多端点探测**：主端点（push2delay）必通该路径才可用；82push2(资金流)/push2his(K线) 不通只记降级 + 排序惩罚，不一票否决。
+  - **多端点探测**：主端点使用 `push2/webguest` 行情列表；辅助探测 `82.push2/webguest` 与 `push2his` 日 K。不通的辅助端点只记降级 + 排序惩罚，不一票否决。当前 `clist`、`ulist.np`、基本面 `stock/get` 和实时 `trends2` 使用 `/webguest` 路由；日 K 优先腾讯前复权，东财与新浪依次后备。
   - **切换粘性 + 熔断**：当前路径比最快慢 ≤50ms 不换（防抖动）；连续失败 3 次冷却 60s，全在冷却仍放行。
-  - 测试：`scripts/test_network_path.py`（28 用例）。
+  - 测试：`scripts/test_network_path.py`（29 用例）。
 - 2026-09-08 实测：行情接口（push2/push2delay/82.push2/push2his/quote/np-anotice + 新浪/腾讯）**直连全部可达**，0.08~0.2s；2026-09-09 复测直连约 105ms，快于 Clash Party 代理（约 286ms）。盘中高峰稳定性仍待验证。

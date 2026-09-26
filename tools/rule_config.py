@@ -77,7 +77,10 @@ RULE_CONFIG: Dict[str, Any] = {
     },
     "dominance": {
         "absolute": {
-            "min_super_net": 0.0,
+            # 2026-09-26：原为 0.0（超大单只要 >0），低成交额股票上几十万也能拿"绝对主导"，
+            # 而 sector_boost 与 A_STRICT 只检查 dom_type 不看金额。补最小金额下限，
+            # 与 A 类 5 分钟门槛同量级（500 万）。
+            "min_super_net": 5_000_000.0,
             "min_super_ratio": 0.50,
             "label": "✓(绝对)",
         },

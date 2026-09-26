@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 实时行情、五档盘口与分时K线快速查询工具
-数据源：腾讯金融 API (qt.gtimg.cn / web.ifzq.gtimg.cn)
+数据源：腾讯金融 API (qt.gtimg.cn / 腾讯日K多主机，见 tencent_kline)
 """
 
 import sys
@@ -10,7 +10,13 @@ import json
 import ssl
 import urllib.request
 import argparse
+from pathlib import Path
 from typing import List, Dict, Any
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daily-stock-analysis" / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+import tencent_kline  # noqa: E402  腾讯日 K 主机列表单一来源
 
 ssl_ctx = ssl._create_unverified_context()
 
@@ -105,15 +111,13 @@ def fetch_minute_data(code: str) -> List[str]:
         return []
 
 def fetch_daily_kline(code: str, count: int = 10) -> List[Dict[str, Any]]:
-    """查询近期前复权日K线"""
+    """查询近期前复权日K线（主机列表共用 tencent_kline，且要求确实是前复权数据）"""
     sym = normalize_code(code)
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sym},day,,,{count + 1},qfq"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        sym_data = data.get("data", {}).get(sym, {})
-        days = sym_data.get("qfqday") or sym_data.get("day") or []
+        # require_qfq=True：本函数对外承诺"前复权"，因此拒绝腾讯的未复权 day 回退，
+        # 宁可报错也不把未复权价当复权价展示。
+        payload, _ = tencent_kline.fetch_kline_json(sym, count + 1, require_qfq=True, timeout=10)
+        days = tencent_kline.kline_rows(payload, sym, require_qfq=True)
         # format: [date, open, close, high, low, volume, ...]
         out = []
         for i in range(len(days)):

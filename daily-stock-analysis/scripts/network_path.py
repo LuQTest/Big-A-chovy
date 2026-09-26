@@ -49,16 +49,19 @@ except Exception:  # 引擎在无 requests 环境走 urllib 兜底，本模块�
     requests = None
 
 # ---- 配置 ----
-# 健康检查端点。第一个为主端点：必须通，该路径才算可用；
-# 其余为辅助端点：不通只记降级 + 排序惩罚（不同域名可能表现不同）。
+# 健康检查端点。首个端点是筛选器实际使用的 webguest 主入口，必须通；
+# 其余为辅助端点，不通只记降级 + 排序惩罚。
 PROBE_ENDPOINTS: Tuple[Tuple[str, str, Dict[str, Any]], ...] = (
-    ("push2delay", "https://push2delay.eastmoney.com/api/qt/clist/get",
+    ("webguest", "https://push2.eastmoney.com/webguest/api/qt/clist/get",
      {"pn": 1, "pz": 1, "fs": "m:1+t:2", "fields": "f12,f14"}),
-    ("82push2", "https://82.push2.eastmoney.com/api/qt/clist/get",
+    ("webguest82", "https://82.push2.eastmoney.com/webguest/api/qt/clist/get",
      {"pn": 1, "pz": 1, "fs": "m:0+t:6", "fields": "f12,f14"}),
-    ("push2his", "https://push2his.eastmoney.com/api/qt/stock/kline/get",
-     {"secid": "1.600000", "klt": "101", "fqt": "1", "lmt": "1",
-      "fields1": "f1", "fields2": "f51"}),
+    # 2026-09-26: 第三个探测点改为引擎实际使用的资金流兜底路径（同主机、不同路径）。
+    # 2026-09-25 实测同一 IP 上 clist 与 fflow 的生死可能不一致，只测 clist 覆盖不到；
+    # 原 push2his 端点已随该主机全面不可用而废弃（push2his 无 /webguest，标准路由已下线）。
+    ("fflow", "https://push2.eastmoney.com/webguest/api/qt/stock/fflow/kline/get",
+     {"secid": "1.600000", "klt": "1", "lmt": "2",
+      "fields1": "f1,f2,f3,f7", "fields2": "f51,f52"}),
 )
 PROBE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X) daily-stock-analysis/1.0",
@@ -171,8 +174,10 @@ def _session_for(proxy_url: Optional[str]):
 
 
 def _is_em_json(data: Any) -> bool:
-    # clist/get 合法返回形如 {"rc":0,...,"data":{...}}；本地端口误答 200 时会在这里被拒
-    return isinstance(data, dict) and ("rc" in data or "data" in data)
+    # Reject HTTP-200 error bodies; a healthy Eastmoney response has rc=0 and data.
+    if not isinstance(data, dict) or data.get("rc", 0) not in (0, "0"):
+        return False
+    return isinstance(data.get("data"), dict)
 
 
 def _probe_requests(proxy_url: Optional[str]) -> Dict[str, Optional[float]]:

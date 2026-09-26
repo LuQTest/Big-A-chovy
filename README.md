@@ -1,4 +1,4 @@
-> **重要通知**：目前行情数据接口访问受限，现有版本可能无法正常获取行情数据。你可以下载项目源码，自行接入合适的付费行情接口。后续会继续适配并发布新版本，届时会在 GitHub Releases 和本 README 更新说明。
+> **数据源说明**：本版已按 2026-09 的实测结果适配取数路径（东财 `/webguest` 路由 + 腾讯日 K 多主机故障转移），行情、资金流与公告均可正常获取。第三方公开接口可能随时调整，若出现取数失败，先运行 `python3 tools/verify_em_webguest.py` 查看各入口状态，再参考 [`docs/东财请求频率与限流.md`](docs/东财请求频率与限流.md)。
 
 # A 股量化筛选工作台
 
@@ -13,10 +13,9 @@
 
 ## 版本标识
 
-- 历史版本：`v0.3.4`，保留原有版本标签。
-- 线上预览版：`v0.3.5-preview.1`，指向清理前的线上基线。
-- 当前开发预览版：[v0.5.0-preview.3](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.5.0-preview.3)，修复板块统计哨兵值崩溃，并在非交易日跳过自动筛选；仍为预览版。
-- Docker 发布版：[v0.5.0-docker.2](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.5.0-docker.2)，基于同一源码提供 `linux/amd64` 和 `linux/arm64` 容器镜像。
+- 当前开发预览版：[v0.5.0-preview.4](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.5.0-preview.4)，适配东财 `/webguest` 取数路径与腾讯日 K 多主机故障转移，修正资金增量窗口、超大单否决标注与 K 线缓存刷新；仍为预览版。
+- Docker 发布版：[v0.5.0-docker.3](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.5.0-docker.3)，基于同一源码提供 `linux/amd64` 和 `linux/arm64` 容器镜像。
+- 旧版本（`v0.3.x`、`v0.4.x`、`v0.5.0-preview.1`–`preview.3`、`v0.5.0-docker.1`–`docker.2`）已被当前版本取代；其 tag 与容器镜像标签保留，便于复现与回退。
 
 完整更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
@@ -102,7 +101,7 @@ HTTPS_PROXY=http://host.docker.internal:7890
 Docker 运行版同时启动 Web 工作台和实时看板，不启动 Finder、macOS `.command` 启动器或桌面 GUI；宿主机端口默认只绑定 `127.0.0.1`，需要局域网访问时应明确修改 compose 端口映射并确认网络可信。它同样不会自动下单。发布标签会由 GitHub Actions 构建并发布多架构镜像到 GitHub Container Registry；如果首次发布后镜像仍是私有的，需要在 GitHub Packages 中将其改为 Public。
 
 ```bash
-docker pull ghcr.io/luqtest/big-a-chovy:v0.5.0-docker.2
+docker pull ghcr.io/luqtest/big-a-chovy:v0.5.0-docker.3
 ```
 
 ### 1. 启动普通筛选 GUI
@@ -320,6 +319,8 @@ git diff --cached --name-only
 3. 需要诊断单一路径时，可用 `--network-mode direct` 或 `--network-mode proxy`；正常使用建议保留 `auto`。
 4. 看板无法连接时，确认 `8765` 端口没有被旧进程占用，并运行停止脚本后重新启动。
 5. 行情接口部分失败时，不要把降级结果当成完整实时结果；优先等待网络恢复。
+6. 当前筛选列表、基本面查询和实时 1 分钟趋势分别使用东财 `push2/webguest` 的 `clist`、`ulist.np`、`stock/get`、`trends2` 路由；日 K 在三个腾讯主机间故障转移（`ifzq.gtimg.cn`、`proxy.finance.qq.com`、`web.ifzq.gtimg.cn`，2026-09-26 实测最后一个被 WAF 拦截而前两个正常），全部失败才降级到新浪（可能不复权）；东财日 K 接口已于 2026-09-25 下线，不再作为数据源。报告头部的「来源」按本轮实际来源生成。可用 `python3 tools/verify_em_webguest.py` 对比标准入口、`/webguest` 路由和 K 线降级路径。
+7. 请求频率、限流参数，以及「限流」与「路径下线」的区分方法见 [`docs/东财请求频率与限流.md`](docs/东财请求频率与限流.md)。
 
 ## 七、开发和测试
 
@@ -368,12 +369,13 @@ python3 -m unittest discover -s daily-stock-analysis/scripts -p 'test_*.py'
 
 1. **筛选结果保存路径**：已修复。GUI、实时看板和 `.command` 失败回退路径均基于项目根目录解析，克隆到其他位置后可直接运行；命令行 `--save` 仍可按使用者需要指定路径。
 2. **网络路径（已代码内实测择优，2026-09-09；同日方案 C 增强）**：`daily-stock-analysis/scripts/network_path.py` 对「直连 + 本机候选代理端口（软件无关）+ 环境代理 + 系统代理」并发实测真实东财接口延迟，按实际可用路径择优；不预设代理或直连优先，路径失败后会重测。看板不再因无代理而放弃筛选；诊断运行 `python3 daily-stock-analysis/scripts/network_path.py`。
+   - **前提**：本机若开启代理的 TUN / Fake-IP 模式，「直连」与「代理」实际是同一出口，该择优退化为网络健康探测（自查方法见「十三、容易踩的坑」第 1 条）。
    - **配置唯一来源**：`daily-stock-analysis/scripts/proxy_ports.json` 的 `candidate_ports`，`network_path.py` 与 `keep_proxy_alive.sh` 读同一份——**换代理软件只改这一处**。
-   - **多端点探测**：主端点（push2delay）必须通该路径才可用；辅助端点（82push2 资金流 / push2his K线）不通只记降级 + 排序惩罚，不一票否决。单端点探测曾漏掉「某出口 82push2 超时但 push2delay 正常」的故障。
+   - **多端点探测**：主端点使用筛选器实际采用的 `push2/webguest` 列表路由；辅助端点检查 `82.push2/webguest` 与 `push2his` K 线。不通的辅助端点只记降级 + 排序惩罚，不一票否决。
    - **切换粘性**：当前路径比最快路径慢不超过 50ms 就不换——实测两条路常只差 1~2ms，纯按延迟排序会导致抖动。
    - **熔断冷却**：连续失败 3 次冷却 60s；全部在冷却时仍放行，避免无路可走。
    - 「太慢」判定用主端点实测延迟，不用含惩罚的评分（否则降级惩罚会把所有路径误判成太慢）。
-   - 测试：`scripts/test_network_path.py`（28 个用例，覆盖枚举/验活/降级/粘性/缓存/熔断/配置回退）。
+   - 测试：`scripts/test_network_path.py`（29 个用例，覆盖枚举/验活/降级/粘性/缓存/熔断/配置回退）。
    - 历史坑：旧版脚本硬编码 7897 并 `open -a "Clash Verge"`，会与新代理软件争夺系统代理、关掉 Verge 就断网。
    - 2026-09-08 实测行情接口直连可达（0.08~0.2s），旧结论"直连会被封锁"已不成立。盘中高峰稳定性仍待验证。
 
@@ -395,7 +397,27 @@ python3 -m unittest discover -s daily-stock-analysis/scripts -p 'test_*.py'
 
 行情筛选不构成收益保证或个性化投资建议。任何真实交易都应以使用者自己的风险承受能力和交易纪律为准。
 
-## 十二、使用边界与社区规范
+## 十二、复盘节奏（建议每个交易周一次）
+
+上游行情接口会不定期失效，执行纪律也会漂移，所以建议**每个交易周做一次复盘：约 5 个交易日，最长不超过 10 个**。完整检查清单见 [`docs/复盘节奏与周检查清单.md`](docs/复盘节奏与周检查清单.md)，包含数据源健康检查、全天报告扫描、单股回看和执行偏差对照。
+
+需要说清楚的是：**这个节奏属于运维检查，不属于参数调优。** 一周的盈亏不能证明规则好坏（同期大盘涨跌往往是大头）；门槛类参数只在 `选股框架.md` 的参数总表与 `tools/rule_config.py` 维护，变更需要走「影子采样 → T+1 结算 → 达到样本门槛后评估转正」的流程。少于 5 个交易日就下结论、或者只改数字不留记录，都会让不同时期的样本失去可比性。
+
+复盘结论写进**本地**决策记录即可，仓库只保留方法论。
+
+## 十三、容易踩的坑（均为实测记录）
+
+1. **别把「直连」当成真的直连。** 本机代理启用 **DNS 接管的 Fake-IP 模式**时，域名解析会被改写，代码里的「直连」也走同一条隧道。线索自查（本机实测有效）：`python3 -c "import socket;print(socket.gethostbyname('push2.eastmoney.com'))"` 返回 `198.18.x.x` 说明这次解析拿到的是 Fake-IP（Fake-IP 网段可配置，示例默认 `198.18.0.1/16`）；但**返回真实 IP 不能反过来证明 TUN 没有接管流量**。本机在该配置下实测：诊断里「直连 112ms / 代理 110ms」是同一出口的两个数字——换成 `redir-host` 等其他 DNS 模式结论可能不同——路径择优因此没有区分度，真正的冗余来自主机级故障转移。
+
+2. **读报告头部的「来源」行。** 出现 `新浪日K(可能不复权)` 意味着当轮日 K 走了降级源，均线口径可能与平时不同；不要把这种轮次的趋势判定当成可比的结论。
+
+3. **接口失败先看响应，再判断类别。** 先跑 `python3 tools/verify_em_webguest.py` 查看各端点的响应（`OK` / `EMPTY` / `FAIL`、HTTP 状态码或异常类型），再结合 [`docs/东财请求频率与限流.md`](docs/东财请求频率与限流.md) 判断属于「限流 / 路径下线 / WAF 拦截」哪一类——脚本本身只提供线索，不给这三类结论。这三类都不要靠改代码、重装或加大重试硬顶。
+
+4. **`--mode` 只决定输出哪些模块，不放宽任何门禁。** `--mode low` 是「额外输出低吸分类」，不是「门槛更松」；建仓门禁与真实仓权限只由 [`选股框架.md`](选股框架.md) 决定。
+
+5. **控制请求量。** 上游对请求强度敏感：2026-09 实测腾讯日 K 被 WAF 拦截时，未加熔断的一轮筛选请求从 167 放大到 1173。看板不要改成全天候轮询（交易时段外它本来不发请求）。
+
+## 十四、使用边界与社区规范
 
 本项目定位为**本地自用的开源行情研究、数据处理和规则筛选工具**。它不是证券公司或证券投资咨询机构，**不是荐股软件**，不提供证券投资咨询、荐股、代客理财、代客下单或证券账户管理服务。
 

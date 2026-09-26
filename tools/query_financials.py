@@ -14,7 +14,14 @@ import json
 import re
 import argparse
 import subprocess
+from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Any, Optional
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daily-stock-analysis" / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+import tencent_kline  # noqa: E402  腾讯日 K 主机列表单一来源
 
 def normalize_code_clean(code: str) -> str:
     """提取6位纯数字代码"""
@@ -37,8 +44,8 @@ def query_financial_profile(code: str) -> Dict[str, Any]:
     secid = get_secid(c)
     tsym = get_tsym(c)
     
-    # 1. 东财 push2delay 实时财务与基本面接口
-    url = f"https://push2delay.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f57,f58,f43,f59,f162,f163,f164,f167,f173,f183,f184,f185,f186,f187"
+    # 1. 东财 webguest 财务与基本面接口
+    url = f"https://push2.eastmoney.com/webguest/api/qt/stock/get?secid={secid}&fields=f57,f58,f43,f59,f162,f163,f164,f167,f173,f183,f184,f185,f186,f187"
     cmd = f"curl -s --connect-timeout 4 \"{url}\""
     
     d = {}
@@ -78,24 +85,38 @@ def query_financial_profile(code: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 3. 计算今年股价涨跌幅 (YTD) - 查开年至今日K
+    # 3. 计算今年股价涨跌幅 (YTD)
+    # 2026-09-26 口径修正：以「去年最后一个交易日收盘价」为基准（常见 YTD 口径）；
+    # 旧实现用年内首个交易日开盘价作分母，会把首日跳空算进年内涨跌。
+    # 次新股没有去年数据时退回年内首个交易日开盘价，并在结果里标注基准。
     ytd_pct = None
-    k_url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={tsym},day,2026-01-01,2026-12-31,200,qfq"
-    k_cmd = f"curl -s --connect-timeout 4 \"{k_url}\""
+    ytd_error = None
+    ytd_basis = ""
+    year = datetime.now().year
     try:
-        k_out = subprocess.check_output(k_cmd, shell=True).decode("utf-8", errors="ignore")
-        k_data = json.loads(k_out)
-        sym_data = k_data.get("data", {}).get(tsym, {})
-        days = sym_data.get("qfqday") or sym_data.get("day") or []
-        if days:
-            first_day = days[0]
-            last_day = days[-1]
-            first_open = float(first_day[1])
-            last_close = price if price > 0 else float(last_day[2])
-            ytd = (last_close - first_open) / first_open * 100.0
-            ytd_pct = round(ytd, 2)
-    except Exception:
-        pass
+        # require_qfq=True：YTD 跨除权日，必须用前复权价；腾讯若只给未复权 day 就报缺失，
+        # 宁可显示"未取到"也不给出被除权污染的涨跌幅。
+        payload, _ = tencent_kline.fetch_kline_json(
+            tsym, 300, start=f"{year - 1}-12-01", end=f"{year}-12-31",
+            require_qfq=True, timeout=6)
+        days = tencent_kline.kline_rows(payload, tsym, require_qfq=True)
+        prev_year_rows = [d for d in days if str(d[0]) < f"{year}-01-01"]
+        this_year_rows = [d for d in days if str(d[0]) >= f"{year}-01-01"]
+        base = None
+        if prev_year_rows:
+            base = float(prev_year_rows[-1][2])
+            ytd_basis = f"{prev_year_rows[-1][0]} 收盘"
+        elif this_year_rows:
+            base = float(this_year_rows[0][1])
+            ytd_basis = f"{this_year_rows[0][0]} 开盘（次新股，无去年数据）"
+        if base and base > 0:
+            last_close = price if price > 0 else float((this_year_rows or days)[-1][2])
+            ytd_pct = round((last_close - base) / base * 100.0, 2)
+        else:
+            ytd_error = "腾讯日K未返回可用于 YTD 的数据"
+    except Exception as exc:
+        # 不做静默失败：YTD 是框架要求的基本面四项之一，取不到必须显式标注待核验
+        ytd_error = f"腾讯日K不可用（{type(exc).__name__}）"
 
     # 盈利与亏损状态判定
     if eps is not None:
@@ -143,7 +164,9 @@ def query_financial_profile(code: str) -> Dict[str, Any]:
         "fin_status": fin_status,
         "fin_color": fin_color,
         "safety_advice": safety_advice,
-        "ytd_pct": ytd_pct
+        "ytd_pct": ytd_pct,
+        "ytd_error": ytd_error,
+        "ytd_basis": ytd_basis,
     }
 
 def print_summary_table(results: List[Dict[str, Any]]):
@@ -161,7 +184,18 @@ def print_summary_table(results: List[Dict[str, Any]]):
         ytd_colored = f"{ytd} 🟢" if (r["ytd_pct"] and r["ytd_pct"] > 0) else (f"{ytd} 🔴" if (r["ytd_pct"] and r["ytd_pct"] < 0) else f"{ytd}")
         advice = r["safety_advice"]
         print(f"{code:<8} {name:<8} {price:>7} {fin:<12} {eps:>11} {pe:>8} {ytd_colored:>19} {advice:<14}")
-    print("=" * 92 + "\n")
+    print("=" * 92)
+    bases = {r.get("ytd_basis") for r in results if r.get("ytd_basis")}
+    if bases:
+        print(f"YTD 口径：以去年最后一个交易日收盘价为基准；本批基准 = {', '.join(sorted(bases))}")
+    # 数据缺失必须显式说明，不能只显示 "-" 让人误以为没有该项
+    missing = [r for r in results if r.get("ytd_error")]
+    for r in missing:
+        print(f"⚠ {r['code']} {r['name']}：YTD 未取到 —— {r['ytd_error']}。"
+              "按框架，基本面数据缺失应列为待核验项、暂不开真实仓。")
+    if missing:
+        print("=" * 92)
+    print()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="股票今年盈利/亏损及年内收益查询工具")

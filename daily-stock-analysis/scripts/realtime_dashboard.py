@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import network_path  # 多路径实测延迟择优（直连+候选代理端口），软件无关
+import tencent_kline  # 腾讯日 K 主机列表单一来源
 
 # Auto-detect system proxy (bypasses IP bans on East Money API)
 def _list_proxy_candidates() -> list[str]:
@@ -120,9 +121,8 @@ def _test_proxy(proxy_url: str, timeout: int = 5) -> bool:
         handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
         opener = urllib.request.build_opener(handler, https_handler)
         req = urllib.request.Request(
-            # 2026-07-30: push2 对海外出口间歇 502 且 302 到 push2delay；
-            # 用 push2delay 做健康检查（A股实时，100%稳定），避免误判"代理不可用"。
-            "https://push2delay.eastmoney.com/api/qt/clist/get?pn=1&pz=1&fs=m:1+t:2",
+            # 使用与筛选列表相同的 push2/webguest 健康入口，避免检测旧标准路径。
+            "https://push2.eastmoney.com/webguest/api/qt/clist/get?pn=1&pz=1&fs=m:1+t:2",
             headers={
                 "User-Agent": "Mozilla/5.0",
                 "Referer": "https://quote.eastmoney.com/",
@@ -226,17 +226,14 @@ _TRADING_DAY_LOCK = threading.Lock()
 
 
 def _fetch_index_kline_dates() -> list:
-    """拉上证指数最近几日K线日期（标准库直连，失败返回空列表）。"""
-    url = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-           "?param=sh000001,day,,,4,qfq")
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    """拉上证指数最近几日K线日期（标准库直连，失败返回空列表）。
+
+    2026-09-26：改走共用的腾讯主机列表。原先写死 web.ifzq.gtimg.cn，该主机已被 WAF 拦截，
+    交易日判定因此长期取不到数据、退化成"保守视为交易日"。
+    """
     try:
-        with urllib.request.urlopen(req, context=ssl._create_unverified_context(),
-                                    timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        node = data.get("data", {}).get("sh000001", {})
-        days = node.get("qfqday") or node.get("day") or []
-        return [d[0] for d in days]
+        payload, _ = tencent_kline.fetch_kline_json("sh000001", 4, timeout=5)
+        return [row[0] for row in tencent_kline.kline_rows(payload, "sh000001")]
     except Exception:
         return []
 

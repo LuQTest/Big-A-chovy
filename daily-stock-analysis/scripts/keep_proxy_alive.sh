@@ -42,7 +42,7 @@ fi
 read -r -a CANDIDATE_PORTS <<< "$ports"
 PROXY_HOST="127.0.0.1"
 # 健康检查：能通过这个 URL 拿到 HTTP 200 才算代理可用（东财实时行情，全天可访问）
-HEALTH_URL="https://push2delay.eastmoney.com/api/qt/clist/get?pn=1&pz=1&fs=m:1+t:2"
+HEALTH_URL="https://push2.eastmoney.com/webguest/api/qt/clist/get?pn=1&pz=1&fs=m:1+t:2"
 HEALTH_TIMEOUT=5
 LOG="$HOME/Library/Logs/keep_proxy.log"
 

@@ -27,16 +27,24 @@ sys.path.insert(0, str(SCRIPT_DIR))
 import a_share_daily_screen as screen
 
 REALTIME_CONFIG = screen.RULE_CONFIG["realtime"]
+EM_TRENDS_URL = "https://push2.eastmoney.com/webguest/api/qt/stock/trends2/get"
 
 KLINE_CACHE_FILE = SCRIPT_DIR / ".kline_cache.json"
 KLINE_CACHE_TTL = 1800  # 30 min — MAs are slow-moving, don't need tick-level freshness
 
-_kline_cache: Dict[str, Any] = {}
-_kline_cache_time: float = 0
-_kline_cache_date: str = ""
+# 每个条目单独记抓取时间：code -> {"fetched_at": ts, "data": result}
+# 2026-09-26 修正：原实现用"整份缓存的保存时间"做 TTL，而保存函数每轮筛选结束都会被调用，
+# 于是计时器每轮被重置、缓存整天不过期——一只股票当天第一次抓到什么就全天沿用，
+# 注释承诺的 30 分钟刷新从未生效。
+_kline_cache: Dict[str, Dict[str, Any]] = {}
+_kline_cache_date: str = ""      # 缓存文件属于哪一天；跨日整体丢弃
 _kline_fetch_count = 0
 _kline_cache_hit_count = 0
 _kline_fail_count = 0
+
+
+def _today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 # ── Adaptive rate limiter ────────────────────────────
@@ -73,51 +81,60 @@ _rate_limiter = AdaptiveRateLimiter()
 # ── Cache persistence ────────────────────────────────
 
 def _load_kline_cache() -> None:
-    global _kline_cache, _kline_cache_time, _kline_cache_date
+    """读取当日缓存文件；旧格式（整条即结果）按文件保存时间补 fetched_at，随后自然过期。"""
+    global _kline_cache, _kline_cache_date
+    _kline_cache = {}
+    _kline_cache_date = ""
     try:
-        if KLINE_CACHE_FILE.exists():
-            data = json.loads(KLINE_CACHE_FILE.read_text(encoding="utf-8"))
-            today = datetime.now().strftime("%Y-%m-%d")
-            if data.get("date") == today:
-                _kline_cache = data.get("data", {})
-                # Reset TTL clock on load — K-line is daily data,
-                # same-day cache is always valid regardless of when it was saved
-                _kline_cache_time = time.time()
-                _kline_cache_date = data.get("date", "")
-                print(f"[kline-cache] loaded {len(_kline_cache)} entries from {today}", file=sys.stderr)
+        if not KLINE_CACHE_FILE.exists():
+            return
+        data = json.loads(KLINE_CACHE_FILE.read_text(encoding="utf-8"))
+        today = _today()
+        if data.get("date") != today:
+            return
+        file_ts = float(data.get("timestamp") or 0)
+        restored: Dict[str, Dict[str, Any]] = {}
+        for code, entry in (data.get("data") or {}).items():
+            if isinstance(entry, dict) and "data" in entry:
+                fetched_at = float(entry.get("fetched_at") or file_ts or 0)
+                restored[code] = {"fetched_at": fetched_at, "data": entry["data"]}
+            else:
+                restored[code] = {"fetched_at": file_ts, "data": entry}
+        _kline_cache = restored
+        _kline_cache_date = today
+        print(f"[kline-cache] loaded {len(_kline_cache)} entries from {today}", file=sys.stderr)
     except Exception:
-        pass
+        _kline_cache = {}
+        _kline_cache_date = ""
 
 
 def _save_kline_cache() -> None:
-    global _kline_cache_time, _kline_cache_date
+    """写出缓存。**不得改写条目的 fetched_at**，否则 TTL 会被每轮重置（2026-09-26 修正点）。"""
+    global _kline_cache_date
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
-        ts = time.time()
-        _kline_cache_time = ts
+        today = _today()
         _kline_cache_date = today
-        data = {"date": today, "timestamp": ts, "data": _kline_cache}
+        data = {"date": today, "timestamp": time.time(), "data": _kline_cache}
         KLINE_CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
 
 
+def _is_entry_fresh(entry: Optional[Dict[str, Any]]) -> bool:
+    """单条缓存是否仍在 TTL 内且属于当日。"""
+    if not entry or _kline_cache_date != _today():
+        return False
+    fetched_at = float(entry.get("fetched_at") or 0)
+    return fetched_at > 0 and (time.time() - fetched_at) <= KLINE_CACHE_TTL
+
+
 def _is_cache_valid() -> bool:
-    if not _kline_cache or not _kline_cache_time:
-        return False
-    today = datetime.now().strftime("%Y-%m-%d")
-    if _kline_cache_date != today:
-        return False
-    if time.time() - _kline_cache_time > KLINE_CACHE_TTL:
-        return False
-    return True
+    """整份缓存是否可用：当日写入且至少有内容（用于看板判断是否需要预热）。"""
+    return bool(_kline_cache) and _kline_cache_date == _today()
 
 
-def _invalidate_kline_cache() -> None:
-    global _kline_cache, _kline_cache_time, _kline_cache_date
-    _kline_cache = {}
-    _kline_cache_time = 0
-    _kline_cache_date = ""
+def _fresh_entry_count() -> int:
+    return sum(1 for entry in _kline_cache.values() if _is_entry_fresh(entry))
 
 
 # ── Monkey-patch fetch_kline with cache + adaptive limiting ──
@@ -129,19 +146,20 @@ def _cached_fetch_kline(code: str, *args, **kwargs):
     """Cached + adaptively rate-limited version of fetch_kline."""
     global _kline_fetch_count, _kline_cache_hit_count, _kline_fail_count
 
-    # 1. Cache hit — instant, no delay
-    if code in _kline_cache and _is_cache_valid():
+    # 1. 命中当日且未过 TTL 的条目 — 立即返回，不占限速
+    entry = _kline_cache.get(code)
+    if _is_entry_fresh(entry):
         _kline_cache_hit_count += 1
-        return _kline_cache[code]
+        return entry["data"]
 
-    # 2. Cache miss — fetch with adaptive rate limiting
+    # 2. 未命中或已过期 — 重新抓取并写入本条的抓取时间
     _kline_fetch_count += 1
     _rate_limiter.wait()
 
     try:
         result = _original_fetch_kline(code, *args, **kwargs)
         if result:
-            _kline_cache[code] = result
+            _kline_cache[code] = {"fetched_at": time.time(), "data": result}
         _rate_limiter.on_success()
         return result
     except Exception as e:
@@ -160,6 +178,7 @@ def get_cache_stats() -> Dict[str, Any]:
     return {
         "cache_size": len(_kline_cache),
         "cache_valid": _is_cache_valid(),
+        "fresh_entries": _fresh_entry_count(),
         "fetch_count": _kline_fetch_count,
         "cache_hit_count": _kline_cache_hit_count,
         "fail_count": _kline_fail_count,
@@ -189,9 +208,10 @@ def prewarm_kline_cache(workers: int = 6, progress_callback=None) -> Dict[str, A
         return {"error": str(exc), "elapsed": round(time.time() - t0, 1)}
 
     prefetch = screen.filter_prefetch(market, ["all"])
+    # 2026-09-26 修正：按"条目是否仍在 TTL 内"逐个判断。原先只判断"代码是否在缓存里"，
+    # 于是当天已过期（>30 分钟）的条目不会被预热刷新，预热统计也失真。
     codes_to_fetch = [
-        r["f12"] for r in prefetch
-        if str(r.get("f12", "")) not in _kline_cache or not _is_cache_valid()
+        r["f12"] for r in prefetch if not _is_entry_fresh(_kline_cache.get(str(r.get("f12", ""))))
     ]
 
     total_codes = len(codes_to_fetch)
@@ -543,7 +563,6 @@ def _is_valid_minute(hhmm: str) -> bool:
 
 def _fetch_minute_trends(code: str) -> List[Tuple[str, float, float, float, float, float, float]]:
     """拉取当日1分钟K。返回 [(hhmm, open, close, high, low, vol_hand, amount_yuan), ...]"""
-    url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
     params = {
         "secid": screen.secid_for(code),
         "fields1": "f1,f2,f3,f8",
@@ -551,7 +570,7 @@ def _fetch_minute_trends(code: str) -> List[Tuple[str, float, float, float, floa
         "ndays": 1,
         "iscr": 0,
     }
-    data = screen.fetch_json(url, params, timeout=6)
+    data = screen.fetch_json(EM_TRENDS_URL, params, timeout=6)
     trends = ((data or {}).get("data") or {}).get("trends") or []
     bars = []
     for line in trends:
@@ -977,13 +996,30 @@ def run_screening(
 
     flow_history = screen.load_flow_history()
     has_snapshot = bool(flow_history)
-    screen.apply_flow_increments(enriched, flow_history)
-    for e in enriched:
-        e.flow_status = screen.classify_flow(e, stats, has_snapshot)
-    screen.save_flow_history(enriched, flow_history)
-
     latest_ts = max([r.get("f124") or 0 for r in market] or [0])
     ts = datetime.fromtimestamp(latest_ts, screen.TZ) if latest_ts else datetime.now(screen.TZ)
+    # 2026-09-26：看板路径原先缺了 CLI 的三步，导致看板既没有 5/15 分钟兜底基准、
+    # 也没有超大单为负的否决标记，而且分钟序列请求预算不会被按轮重置（一轮用尽后永久失效）。
+    screen.reset_flow_minute_round(ts.strftime("%Y-%m-%d"))
+    screen.apply_flow_increments(enriched, flow_history)
+    flow_minute_filled = screen.fill_flow_increments_from_fflow(
+        enriched, expected_date=ts.strftime("%Y-%m-%d")
+    )
+    if flow_minute_filled:
+        screen.MARKET_WARNINGS.append(
+            f"本地快照无可用基准，已用东财当日累计分钟序列为 {flow_minute_filled} 只候选补齐 5/15 分钟增量"
+            "（来源 eastmoney_fflow_minutes）。"
+        )
+    for e in enriched:
+        e.flow_veto = screen.flow_veto_reason(e)
+        e.flow_status = screen.classify_flow(e, stats, has_snapshot)
+    vetoed_codes = sorted({e.code for e in enriched if e.flow_veto})
+    if vetoed_codes:
+        screen.MARKET_WARNINGS.append(
+            "超大单为负（框架一票否决，禁止正式买入建议）：" + "、".join(vetoed_codes)
+        )
+    screen.save_flow_history(enriched, flow_history)
+
     after_1420 = screen.is_after_tail_risk(ts)
 
     strict_ultra_all = (
@@ -1149,7 +1185,7 @@ def run_screening(
                 if fallback_snapshot
                 else "东方财富push2实时/快照"
             )
-            + " + 腾讯/东方财富日K"
+            + " + " + screen.kline_source_summary(enriched)
             + ("" if not skip_announcements else " (公告已跳过)"),
             "total_rows": len(market),
             "provider_total": total,

@@ -58,8 +58,13 @@ function colorChange(val) {
   if (val < 0) return "down";
   return "flat";
 }
-function flowBadge(status) {
-  if (!status) return '<span class="badge badge-dim">-</span>';
+function flowBadge(status, row) {
+  // 2026-09-26：引擎已设置 flow_veto（超大单为负一票否决），但此前前端只渲染 flow_status，
+  // 看板用户看不到否决状态。这里在徽标后拼上标记，与 Markdown 报告的写法保持一致。
+  const veto = row && row.flow_veto
+    ? `<span class="badge badge-bad">❌${row.flow_veto}</span>`
+    : "";
+  if (!status) return veto || '<span class="badge badge-dim">-</span>';
   const m = {
     "有效流入": "badge-good",
     "疑似流入": "badge-maybe",
@@ -67,7 +72,7 @@ function flowBadge(status) {
     "疑似派发": "badge-bad",
     "数据不足": "badge-dim",
   };
-  return `<span class="badge ${m[status] || "badge-dim"}">${status}</span>`;
+  return `<span class="badge ${m[status] || "badge-dim"}">${status}</span>${veto}`;
 }
 function riskBadge(risk) {
   if (!risk) return '<span class="badge badge-dim">-</span>';

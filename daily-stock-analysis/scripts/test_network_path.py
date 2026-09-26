@@ -65,9 +65,15 @@ class NetworkPathTests(unittest.TestCase):
     def test_is_em_json_accepts_eastmoney_shapes(self):
         self.assertTrue(np._is_em_json({"rc": 0, "data": {}}))
         self.assertTrue(np._is_em_json({"data": {"total": 1}}))
+        self.assertFalse(np._is_em_json({"rc": 102, "data": None}))
         self.assertFalse(np._is_em_json({"error": "x"}))   # 本地端口误答 200
         self.assertFalse(np._is_em_json([1, 2, 3]))
         self.assertFalse(np._is_em_json(None))
+
+    def test_primary_probe_uses_the_webguest_list_endpoint(self):
+        name, url, _ = np.PROBE_ENDPOINTS[0]
+        self.assertEqual(name, "webguest")
+        self.assertIn("/webguest/api/qt/clist/get", url)
 
     def test_probe_one_requires_primary_endpoint(self):
         primary = np.PROBE_ENDPOINTS[0][0]
