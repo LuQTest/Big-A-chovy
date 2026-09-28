@@ -1,4 +1,4 @@
-/* A股 Web 工作台 — 与实时看板同风格（Catppuccin Mocha） */
+/* 大模型 Web 工作台 — 与实时看板同风格（Catppuccin Mocha） */
 :root {
   --bg-base: #1e1e2e;
   --bg-surface: #313244;
@@ -223,8 +223,8 @@ table.data a:hover { text-decoration: underline; }
 .foot { text-align: center; padding: 14px; }
 
 /* 涨跌配色 */
-.up { color: var(--red); }        /* A股红涨 */
-.down { color: var(--green); }    /* A股绿跌 */
+.up { color: var(--red); }        /* 大模型红涨 */
+.down { color: var(--green); }    /* 大模型绿跌 */
 
 @media (max-width: 720px) {
   .tools-grid { grid-template-columns: 1fr; }

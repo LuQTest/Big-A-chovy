@@ -335,6 +335,9 @@ class ScreeningScheduler:
         self._screening_lock = threading.Lock()
         self._prewarm_lock = threading.Lock()
         self._stop_event = threading.Event()
+        # 收盘自动退出的回调。宿主（如 web_workbench）用它关闭自己的 HTTP 服务器，
+        # 否则默认只关闭 realtime_dashboard 直启模式下的模块级 _server。
+        self.shutdown_hook = None
         self.settings = {
             "skip_announcements": False,
             "skip_capital_ranking": False,
@@ -555,8 +558,7 @@ class ScreeningScheduler:
                 and (self.latest_result is not None or not is_trading_day())
             ):
                 print("[dashboard] market closed, auto-shutting down...", file=sys.stderr)
-                self._archive_markdown()
-                _shutdown_server()
+                self._auto_shutdown()
                 return
             if self.settings["auto_refresh"] and is_trading_hours():
                 cycle_start = time.time()
@@ -572,6 +574,22 @@ class ScreeningScheduler:
                     self._stop_event.wait(max(10.0, self.settings["interval"] - elapsed))
             else:
                 self._stop_event.wait(30)
+
+    def _auto_shutdown(self) -> None:
+        """收盘自动退出：归档快照，然后关闭宿主服务器的监听。
+
+        直启 realtime_dashboard 时由模块级 _server 兜底；被 web_workbench 等
+        宿主内嵌时，宿主必须设置 shutdown_hook，否则进程会一直挂着（历史缺陷）。
+        """
+        self._archive_markdown()
+        hook = getattr(self, "shutdown_hook", None)
+        if callable(hook):
+            try:
+                hook()
+                return
+            except Exception as e:
+                print(f"[dashboard] shutdown hook failed: {e}", file=sys.stderr)
+        _shutdown_server()
 
     def trigger_refresh(self, force: bool = False) -> bool:
         if self.is_running or self.is_prewarming:

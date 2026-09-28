@@ -1,4 +1,4 @@
-/* A股 Web 工作台前端逻辑（无外部依赖） */
+/* 大模型 Web 工作台前端逻辑（无外部依赖） */
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
@@ -49,7 +49,7 @@ function renderMD(md) {
         html += "<tr>";
         for (let c = 0; c < header.length; c++) {
           let cell = r[c] ?? "";
-          // A股红涨绿跌：+x% 红、-x% 绿
+          // 大模型红涨绿跌：+x% 红、-x% 绿
           if (/^\+?\d/.test(cell) && cell.includes("%")) {
             const cls = cell.trim().startsWith("-") ? "down" : "up";
             cell = `<span class="${cls}">${inline(cell)}</span>`;

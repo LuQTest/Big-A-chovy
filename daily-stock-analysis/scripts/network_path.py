@@ -68,9 +68,10 @@ PROBE_HEADERS = {
     "Referer": "https://quote.eastmoney.com/center/gridlist.html",
     "Accept": "application/json,text/plain,*/*",
 }
-PROBE_TIMEOUT = 3.0        # 单端点探测超时（秒）
+PROBE_TIMEOUT = 8.0        # 单端点探测超时（秒）。代理在冷启动或抖动时首包常需 3~6s，
+                           # 过短会把可用路径误判为不可用（曾导致服务长时间报「无可用路径」）。
 CACHE_TTL = 300.0          # 成功结果的缓存时长（秒）
-NEGATIVE_TTL = 30.0        # 全部失败的负缓存时长（秒），避免网络断开时每次请求都探测
+NEGATIVE_TTL = 15.0        # 全部失败的负缓存时长（秒）。短一些，网络恢复后能更快重新接入。
 SLOW_PATH_MS = 2000.0      # 超过此延迟视为「太慢」，有替代路径时不用它
 STICKY_MARGIN_MS = 50.0    # 当前路径比最快路径慢不超过这个值就不切换（防抖动）
 DEGRADE_PENALTY_MS = 1000.0  # 每个不通的辅助端点的排序惩罚

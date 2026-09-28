@@ -585,7 +585,7 @@ class WorkbenchHandler(dash.DashboardHandler):
 # ---------------------------------------------------------------------------
 def main() -> int:
     _ensure_utf8_stdio()
-    parser = argparse.ArgumentParser(description="A股 B/S 网络工作台")
+    parser = argparse.ArgumentParser(description="大模型 B/S 网络工作台")
     parser.add_argument("--port", type=int, default=dash.PORT)
     parser.add_argument(
         "--host",
@@ -614,6 +614,16 @@ def main() -> int:
         print(f"[workbench] 端口 {args.port} 被占用（{e}）。请先停掉旧进程："
               f" web_workbench.py --port {args.port + 1}", file=sys.stderr)
         return 1
+
+    # 把本工作台的服务器交给看板调度器，使 15:15 收盘自动退出对本进程生效。
+    # 缺了这一步，调度器只会去关 realtime_dashboard 直启模式下的模块级 _server
+    # （此处为 None），于是调度线程自行退出而主线程 serve_forever() 永久阻塞，
+    # 进程一直挂到下次启动被 _kill_stale_port_windows 杀掉。
+    def _shutdown_workbench_server() -> None:
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    dash._server = server
+    dash.scheduler.shutdown_hook = _shutdown_workbench_server
 
     if args.no_dashboard_refresh:
         print("[workbench] dashboard auto-refresh disabled (--no-dashboard-refresh)", file=sys.stderr)
