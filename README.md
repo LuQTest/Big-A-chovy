@@ -238,7 +238,7 @@ python3 tools/verify_t1.py 20260824
 
 影子验证只用于模拟数据统计，不能直接转化为真实仓买入依据：
 
-> ⚠️ **样本保全警告**：当前 `shadow_tracker.py` 每次扫描都会重建三类核心样本，而不带日期的报告查找只取最新一天；无参数或带 `--date` 运行都可能丢掉历史样本。修复并验证全历史增量累积前，禁止用它更新样本；`--report` 仅用于只读查看。线下反馈提到的 `shadow_sample.py` 和 `每日收盘.bat` 不在当前工作副本中，先同步并核实后再使用。
+`shadow_tracker.py` 默认遍历根目录及日期子目录的全部历史报告，按类别、股票和日期增量追加；`--date` 仅限制新增样本的扫描日期，不清空历史样本。重复扫描保留已有触发记录和旁路类别，库文件读取失败会停止，保存采用原子替换。T+1 结算必须同时具有目标分钟（当前 09:45）的价格与匹配日期的日K极值；其他时刻的价格不再冒充 09:45。旧版已经丢失的样本只有在原报告仍存在时才能重新采集。`--report` 用于只读查看；首次升级前建议备份本地样本库。
 
 ```bash
 # 只查看当前进度
@@ -388,7 +388,6 @@ python3 -m unittest discover -s daily-stock-analysis/scripts -p 'test_*.py'
 ### 待处理
 
 1. **工作台的网络前置检查可能跳过新浪全市场备用（2026-09-28 记录）**：`a_share_daily_screen.fetch_market()` 已有新浪备用；但 `realtime_dashboard.ScreeningScheduler.run_screening()` 在 `network_path.has_working_path()` 为假时会提前返回并保留旧快照，不调用筛选引擎。若东财探测全失败、但新浪仍可用，已有备用逻辑可能到不了。修复目标：全网断开时继续快速失败；东财路径不可用但新浪可达时，仍允许进入备用行情流程，并在结果中明确标注降级。待下一个交易时段做真实联调；盘后可先用模拟/受控故障场景验证。
-2. **影子样本扫描会丢失历史累计（线下反馈，2026-09-28）**：`tools/shadow_tracker.py:scan_and_update()` 每次都把 `coalition`、`breakout`、`sector_boost` 三类样本先重建为空；`get_report_files(reports_dir, None)` 又只返回最新一天的报告。每天执行扫描会让样本只剩当天内容，20 样本验证门槛无法累计，已有结算也可能丢失。修复目标是遍历历史报告并按样本键增量合并，同时保持原有业务规则函数不变。修复验证前禁止直接运行 `python3 tools/shadow_tracker.py` 或带 `--date` 扫描；`--report` 只读。当前工作副本没有线下反馈提到的 `shadow_sample.py` / `每日收盘.bat`，临时绕行方案需先同步确认。
 
 ## 十、内置 Skill
 
