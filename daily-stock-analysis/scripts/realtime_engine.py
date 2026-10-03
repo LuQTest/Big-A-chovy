@@ -1119,25 +1119,6 @@ def run_screening(
         if r["code"] in relaxed_confirm_codes
     ]
     dual_pool_raw_rows = [dict(r) for r in dual_pool_rows]
-    strict_candidate_codes = {r["code"] for r in strict_ultra_rows + trend_observation_rows}
-    capital_rank = (
-        []
-        if skip_capital_ranking or fallback_snapshot
-        else screen.rank_capital_candidates(
-            [e for e in enriched if e.code in strict_candidate_codes], stats
-        )[:top]
-    )
-    for row in capital_rank:
-        in_ultra = row["code"] in ultra_codes
-        in_observation = row["code"] in observation_codes
-        in_confirmation = row["code"] in confirmation_codes
-        if in_ultra and in_observation:
-            row["pool_source"] = "双池交集 + 趋势确认" if in_confirmation else "双池交集"
-        elif in_ultra:
-            row["pool_source"] = "超短池"
-        else:
-            row["pool_source"] = "趋势确认池" if in_confirmation else "趋势观察池"
-
     relevant_industries: set = set()
     for r in strict_ultra_rows + trend_observation_rows + strict_trend_rows:
         ind = r.get("industry", "")
@@ -1224,7 +1205,7 @@ def run_screening(
         "intersection_states": [],
         "intersection_config": intersection_runtime_config,
         "intersection_config_meta": intersection_config_meta,
-        "capital_rank": capital_rank,
+        "capital_rank": [],
         "low_ultra": low_ultra_rows if "low" in modes and not fallback_snapshot else [],
         "low_trend": low_trend_rows if "low" in modes and not fallback_snapshot else [],
         "watchlist": watchlist,
@@ -1286,6 +1267,37 @@ def run_screening(
             }
         )
         screen.apply_announcement_pool_gates(result)
+
+    # 与 CLI 一致：公告结果先同步到候选，再计算依赖 clean 的板块加分。
+    risk_map = result.get("announcement_risk_map") or {}
+    for e in enriched:
+        risk = risk_map.get(e.code, screen.RISK_UNKNOWN)
+        e.risk_status = risk if isinstance(risk, str) and risk in screen.RISK_STATUS_VALUES else screen.RISK_UNKNOWN
+    strict_candidate_codes = {
+        row["code"]
+        for row in (result.get("strict_ultra") or []) + (result.get("trend_observation") or [])
+        if screen._row_risk_status(row) not in {screen.RISK_AVOID, screen.RISK_UNKNOWN}
+    }
+    capital_rank = (
+        []
+        if skip_capital_ranking or fallback_snapshot
+        else screen.rank_capital_candidates(
+            [e for e in enriched if e.code in strict_candidate_codes], stats, flow_history
+        )[:top]
+    )
+    for row in capital_rank:
+        in_ultra = row["code"] in ultra_codes
+        in_observation = row["code"] in observation_codes
+        in_confirmation = row["code"] in confirmation_codes
+        if in_ultra and in_observation:
+            row["pool_source"] = "双池交集 + 趋势确认" if in_confirmation else "双池交集"
+        elif in_ultra:
+            row["pool_source"] = "超短池"
+        else:
+            row["pool_source"] = "趋势确认池" if in_confirmation else "趋势观察池"
+
+    result["capital_rank"] = capital_rank
+    screen.apply_announcement_pool_gates(result)
 
     if result.get("strict_enabled"):
         state_payload = screen.load_intersection_state()
