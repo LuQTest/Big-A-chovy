@@ -89,8 +89,9 @@ def fetch_realtime_quotes(codes: List[str]) -> Dict[str, Dict[str, Any]]:
             "time": time_str,
             "buy_orders": buy_orders,
             "sell_orders": sell_orders,
-            "zt": float(parts[48]) if len(parts) > 48 and parts[48] else 0.0,
-            "dt": float(parts[47]) if len(parts) > 47 and parts[47] else 0.0,
+            # 腾讯行情零基字段：47 为涨停价，48 为跌停价。
+            "zt": float(parts[47]) if len(parts) > 47 and parts[47] else 0.0,
+            "dt": float(parts[48]) if len(parts) > 48 and parts[48] else 0.0,
         }
 
     return results
