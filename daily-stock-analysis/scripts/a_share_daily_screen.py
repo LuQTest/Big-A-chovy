@@ -1121,7 +1121,22 @@ def fetch_announcements(code: str, page_size: int = 8) -> List[str]:
         "client_source": "web",
         "stock_list": code,
     }, timeout=ANNOUNCEMENT_REQUEST_TIMEOUT_SECONDS, retries=0)
-    return collect_announcement_titles(data)[:page_size]
+    # HTTP 200 / 合法 JSON 不代表业务查询成功；异常结构必须走 unknown 回退。
+    if not isinstance(data, dict) or data.get("success") != 1 or data.get("error"):
+        raise ValueError("公告接口未返回成功响应")
+    payload = data.get("data")
+    if not isinstance(payload, dict) or not isinstance(payload.get("list"), list):
+        raise ValueError("公告接口缺少有效列表")
+    rows = payload["list"]
+    if not rows and payload.get("total_hits") != 0:
+        raise ValueError("公告空列表缺少零条记录确认")
+    titles = []
+    for row in rows:
+        title = row.get("title") if isinstance(row, dict) else None
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("公告列表包含无有效标题的记录")
+        titles.append(title.strip())
+    return list(dict.fromkeys(titles))[:page_size]
 
 
 def classify_announcement_risk(titles: List[str]) -> Dict[str, Any]:

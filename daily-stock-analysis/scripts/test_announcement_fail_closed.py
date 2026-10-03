@@ -38,6 +38,41 @@ def result_for(*rows):
 
 
 class AnnouncementFailClosedTests(unittest.TestCase):
+    def test_invalid_json_envelopes_fail_closed_without_caching_clean(self):
+        payloads = [
+            {"success": False, "message": "service unavailable", "data": None},
+            {"data": None},
+            [],
+            {"success": 1, "data": {"list": None}},
+            {"success": 1, "error": "failed", "data": {"list": [], "total_hits": 0}},
+            {"success": 1, "data": {"list": [], "total_hits": 8}},
+            {"success": 1, "data": {"list": []}},
+            {"success": 1, "data": {"list": [{}]}},
+            {"success": 1, "data": {"list": [{"title": " "}]}},
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                result, cache = result_for(row("000001")), {}
+                with patch("a_share_daily_screen.fetch_json", return_value=payload):
+                    errors = attach_announcement_risks(result, 8, 1, risk_cache=cache)
+                self.assertEqual(errors, ["000001"])
+                self.assertEqual(result["announcement_risk_map"]["000001"], "unknown")
+                self.assertFalse(result["announcement_check_available"])
+                self.assertEqual(cache, {})
+                apply_announcement_pool_gates(result)
+                self.assertEqual(result["dual_pool"], [])
+
+    def test_successful_empty_and_nonempty_lists_are_classified(self):
+        for rows, risk in [([], "clean"), ([{"title": "关于诉讼事项的公告"}], "avoid")]:
+            with self.subTest(risk=risk):
+                result = result_for(row("000001"))
+                payload = {"success": 1, "error": "", "data": {"list": rows, "total_hits": len(rows)}}
+                with patch("a_share_daily_screen.fetch_json", return_value=payload):
+                    errors = attach_announcement_risks(result, 8, 1, risk_cache={})
+                self.assertEqual(errors, [])
+                self.assertEqual(result["announcement_risk_map"]["000001"], risk)
+                self.assertTrue(result["announcement_check_available"])
+
     def test_fresh_cache_skips_network_and_reports_progress(self):
         result = result_for(row("000001"))
         progress = []
