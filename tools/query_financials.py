@@ -45,7 +45,7 @@ def query_financial_profile(code: str) -> Dict[str, Any]:
     tsym = get_tsym(c)
     
     # 1. 东财 webguest 财务与基本面接口
-    url = f"https://push2.eastmoney.com/webguest/api/qt/stock/get?secid={secid}&fields=f57,f58,f43,f59,f162,f163,f164,f167,f173,f183,f184,f185,f186,f187"
+    url = f"https://push2.eastmoney.com/webguest/api/qt/stock/get?secid={secid}&fields=f57,f58,f43,f55,f59,f162,f163,f164,f167,f173,f183,f184,f185,f186,f187"
     cmd = f"curl -s --connect-timeout 4 \"{url}\""
     
     d = {}
@@ -62,10 +62,12 @@ def query_financial_profile(code: str) -> Dict[str, Any]:
     pe = (float(d.get("f162")) / 100) if d.get("f162") and d.get("f162") != "-" else None
     pe_ttm = (float(d.get("f164")) / 100) if d.get("f164") and d.get("f164") != "-" else None
     pb = (float(d.get("f167")) / 100) if d.get("f167") and d.get("f167") != "-" else None
-    eps = (float(d.get("f187")) / 100) if d.get("f187") and d.get("f187") != "-" else None
+    # f55 为每股收益（元/股），f185 为净利润同比（百分比），均不需要 /100。
+    # f186 / f187 分别为毛利率 / 净利率，不能用作净利润同比 / EPS。
+    eps = float(d["f55"]) if d.get("f55") not in (None, "", "-") else None
     rev_yi = (float(d.get("f183")) / 100000000) if d.get("f183") and d.get("f183") != "-" else None
     rev_tb = (float(d.get("f184"))) if d.get("f184") and d.get("f184") != "-" else None
-    net_profit_tb = (float(d.get("f186"))) if d.get("f186") and d.get("f186") != "-" else None
+    net_profit_tb = float(d["f185"]) if d.get("f185") not in (None, "", "-") else None
 
     # 2. 腾讯行情快速补充（防止东财偶发缺失）
     t_url = f"https://qt.gtimg.cn/q={tsym}"
