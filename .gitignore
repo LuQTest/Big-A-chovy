@@ -27,6 +27,8 @@ daily-stock-analysis/scripts/.kline_cache.json
 daily-stock-analysis/scripts/flow_snapshot.json
 daily-stock-analysis/scripts/.announcement_risk_cache.json
 daily-stock-analysis/scripts/.a_share_data_*.json
+daily-stock-analysis/scripts/..a_share_data_*.json.lock
+daily-stock-analysis/scripts/update_check.json
 daily-stock-analysis/scripts/watchlist_breakout_state.json
 daily-stock-analysis/.rollback-backup-*/
 daily-stock-analysis/scripts/keep_proxy_alive.sh.bak.*
