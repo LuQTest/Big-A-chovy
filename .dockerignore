@@ -29,6 +29,8 @@ daily-stock-analysis/scripts/intersection_state.json
 daily-stock-analysis/scripts/holdings.json
 daily-stock-analysis/scripts/gui_settings.json
 daily-stock-analysis/scripts/.em_nontrading_refresh
+daily-stock-analysis/scripts/update_check.json
+daily-stock-analysis/scripts/..a_share_data_*.json.lock
 daily-stock-analysis/dashboard.log
 
 **/__pycache__

@@ -15,7 +15,7 @@ on:
         default: false
         type: boolean
       image_tag:
-        description: Image tag to publish, for example v0.7.0
+        description: Image tag to publish, for example v0.7.1
         required: false
         type: string
 

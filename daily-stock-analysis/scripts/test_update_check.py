@@ -494,15 +494,22 @@ class StateIsolationTests(_IsolatedStateTestCase):
         )
         self.assertTrue((self.state_dir / update_check.CACHE_NAME).is_file())
 
-    def test_cache_is_never_written_next_to_the_scripts(self):
-        """回归红线：真实脚本目录里不该出现更新检查缓存。"""
-        update_check.check_for_update(
-            local=version_info.parse_version("0.6.1"),
-            now=T0,
-            fetcher=_payload_fetcher(SAMPLE_RELEASES),
-            env={},
+    def test_cache_path_is_derived_from_the_state_dir(self):
+        """回归红线：缓存路径必须完全由运行状态目录解析，不能有硬编码位置。
+
+        这里**不能**断言「真实脚本目录下不存在该文件」：不带 A_SHARE_STATE_DIR
+        正常启动服务时，缓存就写在脚本目录里，与 .kline_cache.json、
+        flow_snapshot.json 等同类。断言全局不存在会变成「跑过一次服务就红」，
+        锁不到真正要保护的东西。要锁的是路径来源：隔离变量改到哪，缓存就跟到哪。
+        """
+        self.assertEqual(
+            update_check.cache_path(), self.state_dir / update_check.CACHE_NAME
         )
-        self.assertFalse((SCRIPT_DIR / update_check.CACHE_NAME).exists())
+        with tempfile.TemporaryDirectory() as other:
+            with mock.patch.object(runtime_paths, "STATE_DIR", Path(other)):
+                redirected = update_check.cache_path()
+        self.assertEqual(redirected, Path(other) / update_check.CACHE_NAME)
+        self.assertNotEqual(redirected, update_check.cache_path())
 
 
 class InstallHintTests(_IsolatedStateTestCase):
