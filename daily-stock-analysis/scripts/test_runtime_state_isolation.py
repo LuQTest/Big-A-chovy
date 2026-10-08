@@ -64,6 +64,7 @@ class RuntimePathsTests(unittest.TestCase):
             k: v for k, v in os.environ.items()
             if k not in (runtime_paths.STATE_DIR_ENV, runtime_paths.REPORT_DIR_ENV)
         }
+        env["PYTHONUTF8"] = "1"
         proc = subprocess.run(
             [sys.executable, "-c", snippet],
             cwd=str(SCRIPT_DIR), env=env, capture_output=True, text=True, timeout=120,
@@ -72,7 +73,7 @@ class RuntimePathsTests(unittest.TestCase):
         lines = proc.stdout.strip().splitlines()
         self.assertEqual(lines[0], str(SCRIPT_DIR))
         self.assertEqual(lines[1], str(SCRIPT_DIR / "x.json"))
-        self.assertEqual(lines[2], "/proj/筛选结果")
+        self.assertEqual(lines[2], str(Path("/proj/筛选结果")))
 
     def test_report_dir_override(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -115,6 +116,7 @@ class EntrypointIsolationTests(unittest.TestCase):
         env = dict(os.environ)
         env[runtime_paths.STATE_DIR_ENV] = tmp
         env[runtime_paths.REPORT_DIR_ENV] = tmp + "/reports"
+        env["PYTHONUTF8"] = "1"
         proc = subprocess.run(
             [sys.executable, "-c", snippet],
             cwd=str(SCRIPT_DIR), env=env, capture_output=True, text=True, timeout=180,
@@ -133,11 +135,12 @@ class EntrypointIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             lines = self._resolved(tmp, snippet).splitlines()
         self.assertEqual(len(lines), 9, lines)
+        expected_state = {Path(tmp) / name for name in STATE_FILES}
         for line in lines[:7]:
             with self.subTest(path=line):
-                self.assertTrue(line.startswith(tmp + "/"), line)
-        self.assertEqual(lines[7], tmp + "/reports")
-        self.assertEqual(lines[8], tmp + "/reports")
+                self.assertIn(Path(line), expected_state)
+        self.assertEqual(Path(lines[7]), Path(tmp) / "reports")
+        self.assertEqual(Path(lines[8]), Path(tmp) / "reports")
 
     def test_reports_and_state_share_one_override(self):
         """看板与工作台的归档目录必须是同一个来源，否则验证产物会漏一处。"""

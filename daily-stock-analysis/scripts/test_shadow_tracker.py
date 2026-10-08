@@ -501,7 +501,11 @@ class ShadowTrackerTests(unittest.TestCase):
 
         def record_divergence():
             try:
-                divergence.record([self._divergence_trigger()])
+                # The lock interleave is the subject of this test; suppress
+                # the tool's human-readable Chinese status line so a legacy
+                # Windows cp1252 console cannot turn it into a false failure.
+                with contextlib.redirect_stdout(io.StringIO()):
+                    divergence.record([self._divergence_trigger()])
             except BaseException as exc:
                 errors.append(exc)
 

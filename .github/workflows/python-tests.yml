@@ -17,6 +17,7 @@ jobs:
       A_SHARE_STATE_DIR: .ci-state
       A_SHARE_REPORT_DIR: .ci-reports
       A_SHARE_SHADOW_DATA_DIR: .ci-shadow
+      PYTHONUTF8: '1'
       PYTHONPATH: daily-stock-analysis/scripts:tools
     steps:
       - name: Check out repository
@@ -37,6 +38,7 @@ jobs:
       A_SHARE_STATE_DIR: .ci-state
       A_SHARE_REPORT_DIR: .ci-reports
       A_SHARE_SHADOW_DATA_DIR: .ci-shadow
+      PYTHONUTF8: '1'
       PYTHONPATH: daily-stock-analysis/scripts;tools
     steps:
       - name: Check out repository
@@ -62,6 +64,7 @@ jobs:
       A_SHARE_STATE_DIR: .ci-state
       A_SHARE_REPORT_DIR: .ci-reports
       A_SHARE_SHADOW_DATA_DIR: .ci-shadow
+      PYTHONUTF8: '1'
       PYTHONPATH: daily-stock-analysis/scripts;tools
     steps:
       - name: Check out repository

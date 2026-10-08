@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 import threading
 import time
 from typing import Any
@@ -21,8 +22,29 @@ from functools import wraps
 
 try:
     import fcntl
-except ImportError:  # pragma: no cover - Windows fallback keeps thread safety
+except ImportError:  # pragma: no cover - platform-specific import
     fcntl = None
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - platform-specific import
+    msvcrt = None
+
+
+def _msvcrt_lock_available() -> bool:
+    return msvcrt is not None and all(
+        getattr(msvcrt, name, None) is not None
+        for name in ("locking", "LK_LOCK", "LK_UNLCK")
+    )
+
+
+def _prepare_msvcrt_lock_file(handle) -> None:
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() < 1:
+        handle.seek(0)
+        handle.write(b"\0")
+        handle.flush()
+        os.fsync(handle.fileno())
+    handle.seek(0)
 
 
 def cache_root() -> Path:
@@ -159,16 +181,38 @@ class JsonCache:
     @contextmanager
     def _file_lock(self, *, exclusive: bool):
         """Coordinate read-modify-write across cache instances/processes."""
+        if fcntl is None and not _msvcrt_lock_available():
+            raise RuntimeError("当前平台没有可用的跨进程文件锁，拒绝访问共享 JSON 缓存")
         lock_path = self.path.with_name(f".{self.path.name}.lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+", encoding="utf-8") as handle:
+        with lock_path.open("a+b") as handle:
             if fcntl is not None:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return
+
+            # Windows has no shared byte-range lock, so serialize reads too;
+            # the cache is tiny and correctness is more important than this
+            # distinction.
+            _prepare_msvcrt_lock_file(handle)
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            except OSError as exc:
+                raise RuntimeError("无法获取 Windows 缓存跨进程文件锁") from exc
             try:
                 yield
             finally:
-                if fcntl is not None:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                pending_error = sys.exc_info()
+                try:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError as exc:
+                    if pending_error[0] is None:
+                        raise RuntimeError("无法释放 Windows 缓存跨进程文件锁") from exc
 
     @staticmethod
     def key(value: Any) -> str:

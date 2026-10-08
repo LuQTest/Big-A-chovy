@@ -369,20 +369,21 @@ def fetch_json(
 ) -> Any:
     errors: Dict[str, str] = {}
     independent_host = "sina.com.cn" in url
-    if NETWORK_MODE == "direct":
-        sessions = [("直连", REQUESTS_DIRECT_SESSION)]
-    elif NETWORK_MODE == "proxy":
-        sessions = [("系统代理", REQUESTS_SESSION)]
-    elif independent_host:
-        # 东财探测失败只说明东财不可用，不能因此把所有候选路径都从新浪
-        # 备用源的探测/实际抓取中排除。
-        sessions = network_path.ordered_independent_sessions(
-            REQUESTS_DIRECT_SESSION,
-            deadline=deadline,
-        )
-    else:
-        # auto：实测所有路径（直连+各候选代理端口）延迟，最快优先，不依赖系统代理设置
-        sessions = network_path.ordered_sessions(REQUESTS_DIRECT_SESSION)
+    if requests is not None:
+        if NETWORK_MODE == "direct":
+            sessions = [("直连", REQUESTS_DIRECT_SESSION)]
+        elif NETWORK_MODE == "proxy":
+            sessions = [("系统代理", REQUESTS_SESSION)]
+        elif independent_host:
+            # 东财探测失败只说明东财不可用，不能因此把所有候选路径都从新浪
+            # 备用源的探测/实际抓取中排除。
+            sessions = network_path.ordered_independent_sessions(
+                REQUESTS_DIRECT_SESSION,
+                deadline=deadline,
+            )
+        else:
+            # auto：实测所有路径（直连+各候选代理端口）延迟，最快优先，不依赖系统代理设置
+            sessions = network_path.ordered_sessions(REQUESTS_DIRECT_SESSION)
 
     for attempt in range(retries + 1):
         try:
