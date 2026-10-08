@@ -31,6 +31,7 @@ import dashboard_settings  # 看板参数配置（唯一写入入口，含白名
 import runtime_paths  # 运行状态路径唯一来源（A_SHARE_STATE_DIR 可定向到临时目录）
 import state_commit  # 回合状态提交门：超时/失败的一轮不得提交运行状态
 import tls_context  # TLS 校验上下文唯一来源（默认校验证书）
+import update_check  # 版本更新提示（唯一对外请求；失败静默、不阻塞请求）
 
 # Auto-detect system proxy (bypasses IP bans on East Money API)
 def _list_proxy_candidates() -> list[str]:
@@ -1219,9 +1220,16 @@ def _sanitize_json(obj):
     return obj
 
 
+def _query_flag(query: str, name: str) -> bool:
+    """查询串里的布尔开关（如 ``?force=1``）。"""
+    values = parse_qs(query).get(name) or []
+    return any(str(value).strip().lower() in ("1", "true", "yes", "on") for value in values)
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
 
         if path == "/" or path == "/index.html":
             self._serve_static("index.html")
@@ -1237,6 +1245,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_json(scheduler.latest_result or {"error": "waiting for first screening..."})
         elif path == "/api/status":
             self._serve_json(scheduler.get_status())
+        elif path == "/api/update":
+            # 只读快照：命中缓存纯本地返回，未命中丢给后台线程，接口不阻塞等网络。
+            self._serve_json(update_check.snapshot(force=_query_flag(parsed.query, "force")))
         elif path == "/api/md":
             if scheduler.latest_md_path:
                 try:

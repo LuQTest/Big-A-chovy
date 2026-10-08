@@ -12,6 +12,14 @@ services:
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+      # Version check (the app's only outbound request; sends no local data).
+      # Empty A_SHARE_VERSION falls back to the VERSION file baked into the image.
+      A_SHARE_UPDATE_CHECK: ${A_SHARE_UPDATE_CHECK:-on}
+      A_SHARE_VERSION: ${A_SHARE_VERSION:-}
+      # auto inspects the shipped docker-compose.yml, which uses a local build.
+      # Set to "image" when you run the app from a compose file that references
+      # ghcr.io/luqtest/big-a-chovy, or "run" for plain docker run.
+      A_SHARE_DOCKER_MODE: ${A_SHARE_DOCKER_MODE:-auto}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

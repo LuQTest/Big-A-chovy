@@ -31,6 +31,7 @@ from tools.rule_config import (  # noqa: E402
     normalize_hhmm,
     shadow_targets,
 )
+from tools.validate_version import check_version_consistency  # noqa: E402
 
 
 def _issue(level: str, message: str) -> Dict[str, str]:
@@ -568,6 +569,7 @@ def validate_workspace(project_root: Path = PROJECT_ROOT) -> Dict[str, List[Dict
         check_code_wiring(project_root),
         check_authority_boundaries(project_root),
         check_active_skill(project_root),
+        check_version_consistency(project_root),
     ):
         _merge(result, check)
     return result
