@@ -87,6 +87,12 @@ def _failing_fetcher(detail="网络不可达：测试替身", calls=None):
     return fetch
 
 
+def _snapshot_as(local_version="0.6.1", force=False):
+    """让 snapshot 使用与缓存种子相同的本地版本，避免依赖仓库 VERSION。"""
+    with mock.patch.dict(update_check.os.environ, {"A_SHARE_VERSION": local_version}):
+        return update_check.snapshot(force=force)
+
+
 class _IsolatedStateTestCase(unittest.TestCase):
     """把运行状态目录定向到临时目录：本项目绝不允许测试写真实状态。"""
 
@@ -457,7 +463,7 @@ class CacheTests(_IsolatedStateTestCase):
         with mock.patch.object(
             update_check, "_utc_now", return_value=T0 + timedelta(hours=2)
         ):
-            payload = update_check.snapshot()
+            payload = _snapshot_as()
         self.assertTrue(payload["update_available"])
         self.assertTrue(payload["install_hint"])
 
@@ -595,7 +601,7 @@ class SnapshotApiTests(_IsolatedStateTestCase):
             env={},
         )
         with mock.patch.object(update_check, "fetch_releases") as fetch:
-            payload = update_check.snapshot()
+            payload = _snapshot_as()
         fetch.assert_not_called()
         self.assertTrue(payload["update_available"])
         self.assertEqual(payload["latest_version"], "0.6.2")
@@ -607,7 +613,7 @@ class SnapshotApiTests(_IsolatedStateTestCase):
             fetcher=_payload_fetcher(SAMPLE_RELEASES),
             env={},
         )
-        payload = update_check.snapshot()
+        payload = _snapshot_as()
         for key in (
             "status",
             "update_available",
@@ -637,7 +643,7 @@ class SnapshotApiTests(_IsolatedStateTestCase):
         ), mock.patch.object(update_check, "start_background_check") as starter, mock.patch.object(
             update_check, "fetch_releases"
         ) as fetch:
-            payload = update_check.snapshot()
+            payload = _snapshot_as()
         starter.assert_not_called()
         fetch.assert_not_called()
         self.assertFalse(payload["checking"])
@@ -655,7 +661,7 @@ class SnapshotApiTests(_IsolatedStateTestCase):
             "_utc_now",
             return_value=T0 + timedelta(seconds=update_check.CACHE_TTL_SECONDS + 5),
         ), mock.patch.object(update_check, "start_background_check") as starter:
-            update_check.snapshot()
+            _snapshot_as()
         starter.assert_called_once_with(force=False)
 
     def test_background_check_collapses_concurrent_calls(self):
