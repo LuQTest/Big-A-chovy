@@ -22,11 +22,29 @@
 
 ## 版本标识
 
-- 当前正式版：[v0.6.1](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.6.1)，源码发布、容器镜像和文档对应同一最终提交。
-- Docker 镜像：`ghcr.io/luqtest/big-a-chovy:v0.6.1`，由 GitHub Actions 发布到 GitHub Container Registry；支持的架构以该次构建的清单为准。
+- 当前正式版：[v0.7.0](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.7.0)，源码发布、容器镜像和文档对应同一最终提交。
+- Docker 镜像：`ghcr.io/luqtest/big-a-chovy:v0.7.0`，由 GitHub Actions 发布到 GitHub Container Registry；支持的架构以该次构建的清单为准。
 - `v0.6.0` 正式版及其镜像继续保留作为回退；更早的预览 Release 页面已清理，Git tag 历史不被补丁版发布移动或覆盖。
 
 完整更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+### 软件内更新提示
+
+工作台和实时看板顶部会显示本机版本，发现同渠道新版本时给出提示、更新内容和升级命令。**不自动下载、不自动替换、不重启**，也不会在交易时段弹窗打断操作。
+
+- **版本单一来源**：仓库根 `VERSION` 只保存共同的基础版本（如 `0.7.0`），渠道由发布 tag 提供——`v0.7.0` 是正式版、`v0.7.0-preview.2` 是预览版、`v0.7.0-docker.2` 是容器版。
+- **只比同一渠道**：正式版只与正式版比，预览版只与预览版比，容器版只与容器版比。不同渠道的版本不互相比大小——`0.6.0-docker.2` 与 `0.6.0-preview.2` 是同一源码提交的两种打包形态。
+- **升级命令按实际安装方式给出**：源码安装是 `git pull`；引用 GHCR 镜像的 Compose 是 `docker compose pull && docker compose up -d`；本仓库自带的 `docker-compose.yml` 用的是本地 `build`，因此提示 `git pull && docker compose up -d --build`。
+- **离线、限流或上游异常时完全静默**：只是没有提示，软件照常使用。
+
+版本对账（发布流水线会跑同一套校验）：
+
+```bash
+python3 tools/validate_version.py                 # VERSION 与 CHANGELOG 顶部条目
+python3 tools/validate_version.py --tag v0.7.0    # 额外校验发布 tag 的基础版本与渠道
+```
+
+设计与边界见 [`docs/更新检查.md`](docs/更新检查.md)。
 
 ## GitHub Star History
 
@@ -62,7 +80,7 @@ python3 -m pip install -r requirements.txt
 
 ```bash
 git fetch origin --tags
-git checkout v0.6.1
+git checkout v0.7.0
 python3 -m pip install -r requirements.txt
 ```
 
@@ -126,7 +144,7 @@ HTTPS_PROXY=http://host.docker.internal:7890
 Docker 运行版同时启动 Web 工作台和实时看板，不启动 Finder、macOS `.command` 启动器或桌面 GUI；宿主机端口默认只绑定 `127.0.0.1`，需要局域网访问时应明确修改 compose 端口映射并确认网络可信。它同样不会自动下单。正式 tag 与 Docker 镜像来自同一最终源码提交；GitHub Actions 负责构建并发布已验证架构的镜像到 GitHub Container Registry。
 
 ```bash
-docker pull ghcr.io/luqtest/big-a-chovy:v0.6.1
+docker pull ghcr.io/luqtest/big-a-chovy:v0.7.0
 ```
 
 `docker compose up -d --build` 会从当前源码 checkout 本地构建；如果需要直接使用已发布镜像，请使用上面的正式 tag，并自行确认宿主机挂载的报告、决策记录、持仓、影子样本和运行状态目录权限。源码版与镜像版都只提供筛选、证据和查询能力，不执行交易。
@@ -371,6 +389,15 @@ git diff --cached --name-only
 确认没有报告、决策记录、持仓、缓存或密钥后再提交。不要使用 `git add -f` 强制添加被排除的文件。
 
 `sync_to_github.sh` 会执行 `git add -A`、自动提交并推送；使用前仍要确认本机私有目录已排除。GitHub 仓库若不是私有仓库，请不要上传真实持仓、交易金额、账户信息或个人决策记录。
+
+### 唯一的对外请求：版本检查
+
+工作台与实时看板启动后会在后台查询一次 GitHub 的 Release 列表（`api.github.com`），用于提示新版本。这是本项目**唯一**的对外请求。
+
+- 只发出版本检查请求本身，**不发送任何本机数据**：没有报告、没有持仓、没有决策记录、没有账户信息，也不带机器标识。
+- 24 小时内不会重复查询；离线、限流或接口异常时静默失败，不影响任何筛选与查询功能。
+- 关闭方式：启动前设置 `A_SHARE_UPDATE_CHECK=off`。
+- 检查结果的缓存写在运行状态目录（默认 `daily-stock-analysis/scripts/`，可用 `A_SHARE_STATE_DIR` 定向到临时目录），与报告归档和决策记录无关。
 
 ## 六、网络问题排查
 

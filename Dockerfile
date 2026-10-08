@@ -36,7 +36,9 @@ RUN mkdir -p /app/runtime /app/筛选结果 /app/决策记录 /app/tools/shadow_
     && ln -s /app/runtime/gui_settings.json \
         /app/daily-stock-analysis/scripts/gui_settings.json \
     && ln -s /app/runtime/.em_nontrading_refresh \
-        /app/daily-stock-analysis/scripts/.em_nontrading_refresh
+        /app/daily-stock-analysis/scripts/.em_nontrading_refresh \
+    && ln -s /app/runtime/update_check.json \
+        /app/daily-stock-analysis/scripts/update_check.json
 
 EXPOSE 8765
 

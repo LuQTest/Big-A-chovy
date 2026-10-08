@@ -15,7 +15,7 @@ on:
         default: false
         type: boolean
       image_tag:
-        description: Image tag to publish, for example v0.6.1
+        description: Image tag to publish, for example v0.7.0
         required: false
         type: string
 
@@ -28,6 +28,23 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # 镜像 tag 就是 docker 渠道的版本标识：tag 与 VERSION 不一致时不该发布镜像，
+      # 否则容器里的版本检查会拿错误的基准去比较。
+      - name: Verify version consistency (VERSION / CHANGELOG / tag)
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            python tools/validate_version.py --tag "$RELEASE_TAG"
+          else
+            python tools/validate_version.py
+          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

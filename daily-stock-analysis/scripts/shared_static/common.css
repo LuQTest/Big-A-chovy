@@ -98,6 +98,80 @@
   opacity: .8;
 }
 .ss-notice button:hover { opacity: 1; }
+/* `.ss-notice` 由本层定义，它的隐藏态也必须由本层定义：看板页的 style.css 没有全局
+   `.hidden` 规则，少了这一条，清空后的提示框会留下一条空的黄色横条。 */
+.ss-notice.hidden { display: none; }
+
+/* ---- 版本提示：非模态、默认折叠 ----
+   席位在共用状态条之下；没有新版时只留一行版本号与「检查更新」，有新版才展开。 */
+.update-notice {
+  padding: 0 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.update-notice.hidden { display: none; }
+.update-notice .un-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+.un-pill {
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: 11px;
+  white-space: nowrap;
+  border: 1px solid rgba(137, 180, 250, .3);
+  background: var(--blue-bg, #1e2538);
+  color: var(--blue, #89b4fa);
+}
+.un-meta { color: var(--text-dim); }
+.un-meta code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-primary);
+  background: var(--bg-base, #1e1e2e);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.un-toggle, .un-check {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--blue, #89b4fa);
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.un-toggle:hover, .un-check:hover { opacity: .8; }
+.un-check { margin-left: auto; color: var(--text-dim); }
+.un-link { color: var(--blue, #89b4fa); }
+.un-panel {
+  padding: 8px 0 10px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.un-panel.hidden { display: none; }
+.un-notes {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  background: var(--bg-base, #1e1e2e);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.un-detail { color: var(--yellow, #f9e2af); }
 
 @media (max-width: 720px) {
   .shared-status .ss-flags { margin-left: 0; }

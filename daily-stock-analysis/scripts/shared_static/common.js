@@ -178,6 +178,132 @@
     });
   }
 
+  /* ---- 版本提示：非模态、默认折叠 ----
+     只依赖 /api/update 的字段。Release 正文一律 esc() 后按**纯文本**渲染，不做
+     Markdown→HTML：上游正文里的 <script> 或事件属性在纯文本下无法执行，从根上
+     避免把第三方文本当标记执行。 */
+  var UPDATE_POLL_MS = 30 * 60 * 1000;
+  var UPDATE_RETRY_MS = 2000;
+  var UPDATE_RETRY_MAX = 5;
+  var UPDATE_NOTES_MAX = 4000;
+
+  /** Release 链接只放行 GitHub 的 https 地址（服务端已过滤，这里再挡一道）。 */
+  function safeReleaseUrl(value) {
+    var url = text(value, "");
+    return /^https:\/\/github\.com\//.test(url) ? url : "";
+  }
+
+  /** 正文按纯文本渲染：只把行首的 -/* 换成项目符号，不生成任何 HTML。 */
+  function releaseNotes(value) {
+    return text(value, "").slice(0, UPDATE_NOTES_MAX).split("\n").map(function (line) {
+      return line.replace(/^\s*[-*]\s+/, "• ");
+    }).join("\n");
+  }
+
+  function updateSummary(st) {
+    if (st.update_available) return "";
+    if (st.status === "ok") return "已是最新";
+    if (st.status === "checking") return "检查中…";
+    if (st.status === "disabled") return "更新检查已关闭";
+    return "未获取到版本信息";
+  }
+
+  /** 版本条：常显本机版本，有新版本时加蓝色胶囊，详情默认折叠（非模态）。 */
+  function renderUpdate(element, data) {
+    if (!element) return;
+    var st = data || {};
+    if (!st.local_version) {
+      // 本机版本都读不到就不占位：这里不该出现只有维护者才看得懂的空白条。
+      element.classList.add("hidden");
+      element.innerHTML = "";
+      return;
+    }
+    var url = safeReleaseUrl(st.release_url);
+    var notes = releaseNotes(st.release_notes);
+    var expandable = Boolean(st.update_available || notes || st.detail);
+    var html = '<div class="un-bar">';
+    html += '<span class="un-meta">本机 v' + esc(st.local_version) + " · " + esc(st.channel_label) + "</span>";
+    if (st.update_available) {
+      html += '<span class="un-pill">有新版本 v' + esc(st.latest_version) + "</span>";
+    }
+    var summary = updateSummary(st);
+    if (summary) html += '<span class="un-meta">' + esc(summary) + "</span>";
+    if (expandable) {
+      html += '<button type="button" class="un-toggle" aria-expanded="false">'
+        + (st.update_available ? "查看更新内容" : "详情") + "</button>";
+    }
+    if (url) html += '<a class="un-link" data-role="release">Release 页面</a>';
+    if (st.status !== "disabled") {
+      html += '<button type="button" class="un-check">检查更新</button>';
+    }
+    html += "</div>";
+
+    if (expandable) {
+      html += '<div class="un-panel hidden">';
+      if (st.update_available && st.install_hint) {
+        html += '<div class="un-meta">升级：<code>' + esc(st.install_hint) + "</code></div>";
+      }
+      if (st.update_available && st.image_ref) {
+        html += '<div class="un-meta">镜像：<code>' + esc(st.image_ref) + "</code></div>";
+      }
+      if (notes) html += '<pre class="un-notes">' + esc(notes) + "</pre>";
+      if (st.detail) html += '<div class="un-detail">' + esc(st.detail) + "</div>";
+      html += "</div>";
+    }
+    element.innerHTML = html;
+    element.classList.remove("hidden");
+
+    var toggle = element.querySelector(".un-toggle");
+    var panel = element.querySelector(".un-panel");
+    if (toggle && panel) {
+      var openLabel = st.update_available ? "查看更新内容" : "详情";
+      toggle.addEventListener("click", function () {
+        var nowHidden = panel.classList.toggle("hidden");
+        toggle.setAttribute("aria-expanded", String(!nowHidden));
+        toggle.textContent = nowHidden ? openLabel : "收起";
+      });
+    }
+    var link = element.querySelector('[data-role="release"]');
+    if (link && url) {
+      // href 用属性赋值，不拼进 innerHTML；上面已限定 https://github.com/ 前缀。
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+    }
+    var check = element.querySelector(".un-check");
+    if (check) {
+      check.addEventListener("click", function () {
+        loadUpdate(element, true, 0);
+      });
+    }
+  }
+
+  /** 读一次 /api/update。检查失败静默处理，软件照常使用。 */
+  function loadUpdate(element, force, retryLeft) {
+    var url = force ? "/api/update?force=1" : "/api/update";
+    return fetch(url).then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    }).then(function (data) {
+      renderUpdate(element, data);
+      var left = retryLeft === undefined ? UPDATE_RETRY_MAX : retryLeft;
+      if (data && data.status === "checking" && left > 0) {
+        // 首次检查在后台线程里跑：短间隔补几次，别让用户等下一个 30 分钟轮询。
+        setTimeout(function () { loadUpdate(element, false, left - 1); }, UPDATE_RETRY_MS);
+      }
+    }).catch(function () {
+      // 检查失败不打扰用户：不弹窗、不写控制台错误、软件照常使用。
+      return null;
+    });
+  }
+
+  /** 挂载版本条。宿主页面没有这个席位时什么都不做。 */
+  function mountUpdateNotice() {
+    var element = document.getElementById("update-notice");
+    if (!element) return;
+    startPolling(function () { loadUpdate(element, false); }, UPDATE_POLL_MS);
+  }
+
   function fetchStatus() {
     return fetch("/api/status").then(function (response) {
       if (!response.ok) throw new Error("HTTP " + response.status);
@@ -204,5 +330,13 @@
     duration: duration,
     clock: clock,
     OWNER_TEXT: OWNER_TEXT,
+    renderUpdate: renderUpdate,
+    loadUpdate: loadUpdate,
+    mountUpdateNotice: mountUpdateNotice,
+    releaseNotes: releaseNotes,
+    safeReleaseUrl: safeReleaseUrl,
   };
+
+  // 自挂载：版本条是共用行为，两个入口都只管在页面里留席位，不必各写一遍启动代码。
+  mountUpdateNotice();
 })(window);
