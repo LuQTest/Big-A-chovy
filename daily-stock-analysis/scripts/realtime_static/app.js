@@ -1136,7 +1136,9 @@ function updateStatus(status) {
   // Show md path in footer
   if (status.md_path) {
     const footer = document.getElementById("footer");
-    const mdShort = status.md_path.split("/").slice(-2).join("/");
+    // Paths may use either separator (the server runs on Windows too), so split
+    // on both instead of assuming "/".
+    const mdShort = status.md_path.split(/[\\/]+/).slice(-2).join("/");
     const existing = footer.textContent;
     if (!existing.includes("MD:")) {
       footer.textContent = existing + (existing ? " | " : "") + `MD: ${mdShort}`;
