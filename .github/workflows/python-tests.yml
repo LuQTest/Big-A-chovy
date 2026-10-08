@@ -14,9 +14,9 @@ jobs:
     name: Full regression (Ubuntu)
     runs-on: ubuntu-latest
     env:
-      A_SHARE_STATE_DIR: ${{ runner.temp }}/a-share-state
-      A_SHARE_REPORT_DIR: ${{ runner.temp }}/a-share-reports
-      A_SHARE_SHADOW_DATA_DIR: ${{ runner.temp }}/a-share-shadow
+      A_SHARE_STATE_DIR: .ci-state
+      A_SHARE_REPORT_DIR: .ci-reports
+      A_SHARE_SHADOW_DATA_DIR: .ci-shadow
       PYTHONPATH: daily-stock-analysis/scripts:tools
     steps:
       - name: Check out repository
@@ -34,9 +34,9 @@ jobs:
     name: Windows native shadow-lock acceptance
     runs-on: windows-latest
     env:
-      A_SHARE_STATE_DIR: ${{ runner.temp }}\a-share-state
-      A_SHARE_REPORT_DIR: ${{ runner.temp }}\a-share-reports
-      A_SHARE_SHADOW_DATA_DIR: ${{ runner.temp }}\a-share-shadow
+      A_SHARE_STATE_DIR: .ci-state
+      A_SHARE_REPORT_DIR: .ci-reports
+      A_SHARE_SHADOW_DATA_DIR: .ci-shadow
       PYTHONPATH: daily-stock-analysis/scripts;tools
     steps:
       - name: Check out repository
@@ -59,9 +59,9 @@ jobs:
     runs-on: windows-latest
     continue-on-error: true
     env:
-      A_SHARE_STATE_DIR: ${{ runner.temp }}\a-share-state
-      A_SHARE_REPORT_DIR: ${{ runner.temp }}\a-share-reports
-      A_SHARE_SHADOW_DATA_DIR: ${{ runner.temp }}\a-share-shadow
+      A_SHARE_STATE_DIR: .ci-state
+      A_SHARE_REPORT_DIR: .ci-reports
+      A_SHARE_SHADOW_DATA_DIR: .ci-shadow
       PYTHONPATH: daily-stock-analysis/scripts;tools
     steps:
       - name: Check out repository
