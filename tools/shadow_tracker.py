@@ -35,8 +35,12 @@ from typing import Callable, Dict, List, Any, Optional, Tuple
 
 try:
     import fcntl
-except ImportError:  # pragma: no cover - writes are explicitly refused below
+except ImportError:  # pragma: no cover - platform-specific import
     fcntl = None
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - platform-specific import
+    msvcrt = None
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -74,6 +78,30 @@ class ShadowDatabaseError(ValueError):
 
 class ShadowDatabaseConflict(ShadowDatabaseError):
     """A stale whole-database snapshot would remove or overwrite newer data."""
+
+
+def _msvcrt_lock_available() -> bool:
+    """Return whether the Windows byte-range locking primitive is usable."""
+    return msvcrt is not None and all(
+        getattr(msvcrt, name, None) is not None
+        for name in ("locking", "LK_LOCK", "LK_UNLCK")
+    )
+
+
+def _prepare_msvcrt_lock_file(handle) -> None:
+    """Ensure byte zero exists before asking msvcrt to lock it.
+
+    ``msvcrt.locking`` locks ``nbytes`` from the descriptor's current file
+    position and may lock beyond EOF.  An explicit byte makes creation and
+    cleanup deterministic across Windows filesystems and Python runtimes.
+    """
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() < 1:
+        handle.seek(0)
+        handle.write(b"\0")
+        handle.flush()
+        os.fsync(handle.fileno())
+    handle.seek(0)
 
 
 def _empty_db() -> Dict[str, Any]:
@@ -119,19 +147,52 @@ def _validate_db(db: Any) -> Dict[str, Any]:
 @contextmanager
 def _database_lock():
     """Serialize a complete database transaction across threads and processes."""
-    if fcntl is None:
+    if fcntl is None and not _msvcrt_lock_available():
         raise ShadowDatabaseError(
             "当前平台没有可用的跨进程文件锁，拒绝写入影子样本库以避免并发丢失历史"
         )
     SHADOW_DATA_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = SHADOW_DB_FILE.with_name(f".{SHADOW_DB_FILE.name}.lock")
     with _DB_THREAD_LOCK:
-        with lock_path.open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        with lock_path.open("a+b") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return
+
+            # Windows has no fcntl.  Use the C runtime's byte-range lock
+            # instead of silently downgrading to a thread lock or allowing an
+            # unsafe write.  LK_LOCK retries for a bounded period; failure is
+            # still a write refusal.
+            _prepare_msvcrt_lock_file(handle)
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            except OSError as exc:
+                raise ShadowDatabaseError(
+                    "无法获取 Windows 跨进程文件锁，拒绝写入影子样本库以避免并发丢失历史"
+                ) from exc
             try:
                 yield
             finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                # The locked region starts at the descriptor's current
+                # position; seek back before unlocking, including after an
+                # exception in the transaction body.
+                pending_error = sys.exc_info()
+                try:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError as exc:
+                    # Preserve a transaction exception if there is one; on a
+                    # normal exit, an unlock failure is itself a write
+                    # refusal rather than a silent safety downgrade.
+                    if pending_error[0] is None:
+                        raise ShadowDatabaseError(
+                            "无法释放 Windows 跨进程文件锁，拒绝完成影子样本库写入"
+                        ) from exc
 
 
 def _atomic_save_db(db: Dict[str, Any]) -> None:

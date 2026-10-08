@@ -2,6 +2,8 @@ import contextlib
 import io
 import json
 import multiprocessing
+import queue
+import time
 import unittest
 import os
 import sys
@@ -54,6 +56,7 @@ def _shadow_process_scan(shadow_dir, reports_dir, date_str, simulate_no_fcntl, b
     process_tracker.SHADOW_DB_FILE = process_tracker.SHADOW_DATA_DIR / "shadow_samples.json"
     if simulate_no_fcntl:
         process_tracker.fcntl = None
+        process_tracker.msvcrt = None
         try:
             with process_tracker._database_lock():
                 pass
@@ -83,13 +86,53 @@ def _shadow_process_scan(shadow_dir, reports_dir, date_str, simulate_no_fcntl, b
         output_queue.put(("ok", ""))
 
 
+def _shadow_lock_holder(shadow_dir, ready_event, release_event, output_queue, raise_inside=False):
+    """Hold the real platform lock so a second process can probe exclusion."""
+    os.environ["A_SHARE_SHADOW_DATA_DIR"] = shadow_dir
+    process_tracker = tracker
+    process_tracker.SHADOW_DATA_DIR = Path(shadow_dir)
+    process_tracker.SHADOW_DB_FILE = process_tracker.SHADOW_DATA_DIR / "shadow_samples.json"
+    try:
+        with process_tracker._database_lock():
+            output_queue.put(("entered", ""))
+            ready_event.set()
+            if raise_inside:
+                raise RuntimeError("synthetic transaction failure")
+            if not release_event.wait(20):
+                raise TimeoutError("lock holder was not released")
+    except RuntimeError as exc:
+        if raise_inside:
+            output_queue.put(("raised", str(exc)))
+        else:
+            output_queue.put(("error", repr(exc)))
+    except BaseException as exc:
+        output_queue.put(("error", repr(exc)))
+    else:
+        output_queue.put(("released", ""))
+
+
+def _shadow_lock_contender(shadow_dir, output_queue):
+    """Acquire and release the same platform lock in an independent process."""
+    os.environ["A_SHARE_SHADOW_DATA_DIR"] = shadow_dir
+    process_tracker = tracker
+    process_tracker.SHADOW_DATA_DIR = Path(shadow_dir)
+    process_tracker.SHADOW_DB_FILE = process_tracker.SHADOW_DATA_DIR / "shadow_samples.json"
+    started = time.monotonic()
+    try:
+        with process_tracker._database_lock():
+            output_queue.put(("entered", time.monotonic() - started))
+    except BaseException as exc:
+        output_queue.put(("error", repr(exc)))
+
+
 class ShadowTrackerTests(unittest.TestCase):
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
         self.old_shadow_dir = tracker.SHADOW_DATA_DIR
         self.old_shadow_file = tracker.SHADOW_DB_FILE
         self.old_fcntl = tracker.fcntl
-        if tracker.fcntl is None:
+        self.old_msvcrt = tracker.msvcrt
+        if tracker.fcntl is None and not tracker._msvcrt_lock_available():
             # Existing unit cases use only one process; cross-process safety is
             # tested separately and production still refuses writes without a
             # genuine lock implementation.
@@ -101,6 +144,7 @@ class ShadowTrackerTests(unittest.TestCase):
         tracker.SHADOW_DATA_DIR = self.old_shadow_dir
         tracker.SHADOW_DB_FILE = self.old_shadow_file
         tracker.fcntl = self.old_fcntl
+        tracker.msvcrt = self.old_msvcrt
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def _write_coalition_report(self, date_str, time_str, codes, *, folder=None, reordered=False):
@@ -543,14 +587,92 @@ class ShadowTrackerTests(unittest.TestCase):
         output_queue.join_thread()
         return outcomes
 
-    @unittest.skipIf(tracker.fcntl is None, "platform has no real cross-process lock")
+    @unittest.skipUnless(
+        tracker.fcntl is not None or tracker._msvcrt_lock_available(),
+        "platform has no real cross-process lock",
+    )
     def test_independent_process_scans_preserve_both_dates(self):
         outcomes = self._run_process_scans(simulate_no_fcntl=False)
         self.assertEqual(outcomes, [("ok", ""), ("ok", "")])
         db = init_db()
         self.assertEqual({row["code"] for row in db["samples"]["coalition"]}, {"000011", "000012"})
 
-    def test_no_fcntl_processes_refuse_unsafe_writes_instead_of_losing_history(self):
+    @unittest.skipUnless(
+        tracker.fcntl is not None or tracker._msvcrt_lock_available(),
+        "platform has no real cross-process lock",
+    )
+    def test_cross_process_lock_excludes_contender_and_releases_after_exception(self):
+        context = multiprocessing.get_context("spawn")
+        holder_ready = context.Event()
+        holder_release = context.Event()
+        holder_output = context.Queue()
+        contender_output = context.Queue()
+        holder = context.Process(
+            target=_shadow_lock_holder,
+            args=(str(tracker.SHADOW_DATA_DIR), holder_ready, holder_release, holder_output),
+        )
+        contender = context.Process(
+            target=_shadow_lock_contender,
+            args=(str(tracker.SHADOW_DATA_DIR), contender_output),
+        )
+        try:
+            holder.start()
+            self.assertTrue(holder_ready.wait(20), "lock holder did not enter")
+            self.assertEqual(holder_output.get(timeout=5)[0], "entered")
+            contender.start()
+            with self.assertRaises(queue.Empty):
+                contender_output.get(timeout=1.0)
+
+            holder_release.set()
+            self.assertEqual(contender_output.get(timeout=20)[0], "entered")
+            holder.join(timeout=20)
+            contender.join(timeout=20)
+            self.assertFalse(holder.is_alive())
+            self.assertFalse(contender.is_alive())
+            self.assertEqual(holder.exitcode, 0)
+            self.assertEqual(contender.exitcode, 0)
+        finally:
+            holder_release.set()
+            for process in (holder, contender):
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+
+        raised_ready = context.Event()
+        raised_release = context.Event()
+        raised_output = context.Queue()
+        raiser = context.Process(
+            target=_shadow_lock_holder,
+            args=(str(tracker.SHADOW_DATA_DIR), raised_ready, raised_release, raised_output, True),
+        )
+        after_exception_output = context.Queue()
+        after_exception = context.Process(
+            target=_shadow_lock_contender,
+            args=(str(tracker.SHADOW_DATA_DIR), after_exception_output),
+        )
+        raiser.start()
+        try:
+            self.assertTrue(raised_ready.wait(20), "exception holder did not enter")
+            self.assertEqual(raised_output.get(timeout=5)[0], "entered")
+            raiser.join(timeout=20)
+            self.assertFalse(raiser.is_alive())
+            self.assertEqual(raiser.exitcode, 0)
+            self.assertEqual(raised_output.get(timeout=5)[0], "raised")
+
+            after_exception.start()
+            self.assertEqual(after_exception_output.get(timeout=20)[0], "entered")
+            after_exception.join(timeout=20)
+            self.assertFalse(after_exception.is_alive())
+            self.assertEqual(after_exception.exitcode, 0)
+        finally:
+            if raiser.is_alive():
+                raiser.terminate()
+                raiser.join(timeout=5)
+            if after_exception.is_alive():
+                after_exception.terminate()
+                after_exception.join(timeout=5)
+
+    def test_no_cross_process_lock_processes_refuse_unsafe_writes(self):
         outcomes = self._run_process_scans(simulate_no_fcntl=True)
         if all(kind == "refused" for kind, _detail in outcomes):
             self.assertTrue(all("跨进程" in detail or "拒绝" in detail for _, detail in outcomes))
@@ -562,6 +684,43 @@ class ShadowTrackerTests(unittest.TestCase):
         self.assertEqual(outcomes, [("ok", ""), ("ok", "")])
         db = init_db()
         self.assertEqual({row["code"] for row in db["samples"]["coalition"]}, {"000011", "000012"})
+
+    def test_windows_lock_acquisition_failure_refuses_write(self):
+        class FailingMSVCRT:
+            LK_LOCK = 1
+            LK_UNLCK = 0
+
+            @staticmethod
+            def locking(_fd, _mode, _nbytes):
+                raise OSError("synthetic Windows lock failure")
+
+        tracker.fcntl = None
+        tracker.msvcrt = FailingMSVCRT
+        with self.assertRaises(tracker.ShadowDatabaseError) as context:
+            with tracker._database_lock():
+                self.fail("unreachable")
+        self.assertIn("Windows", str(context.exception))
+        self.assertFalse(tracker.SHADOW_DB_FILE.exists())
+
+    def test_windows_lock_release_failure_refuses_normal_exit(self):
+        class UnlockFailingMSVCRT:
+            LK_LOCK = 1
+            LK_UNLCK = 0
+            calls = 0
+
+            @classmethod
+            def locking(cls, _fd, mode, _nbytes):
+                cls.calls += 1
+                if mode == cls.LK_UNLCK:
+                    raise OSError("synthetic Windows unlock failure")
+
+        tracker.fcntl = None
+        tracker.msvcrt = UnlockFailingMSVCRT
+        with self.assertRaises(tracker.ShadowDatabaseError) as context:
+            with tracker._database_lock():
+                pass
+        self.assertIn("释放", str(context.exception))
+        self.assertEqual(UnlockFailingMSVCRT.calls, 2)
 
     def test_malformed_database_and_atomic_write_failure_preserve_existing_file(self):
         tracker.SHADOW_DATA_DIR.mkdir(parents=True, exist_ok=True)

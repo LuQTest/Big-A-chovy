@@ -22,9 +22,9 @@
 
 ## 版本标识
 
-- 当前正式版：[v0.6.0](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.6.0)，源码发布、容器镜像和文档对应同一最终提交。
-- Docker 镜像：`ghcr.io/luqtest/big-a-chovy:v0.6.0`，由 GitHub Actions 发布到 GitHub Container Registry；支持的架构以该次构建的清单为准。
-- 回退用发布保留最近一次已验证的 `v0.6.0-preview.2` / `v0.6.0-docker.2` 以及稳定版 `v0.5.0-docker.4`；更早的重复或已被替代的 GitHub Release 已清理，tag 仍保留用于复现。
+- 当前正式版：[v0.6.1](https://github.com/LuQTest/Big-A-chovy/releases/tag/v0.6.1)，源码发布、容器镜像和文档对应同一最终提交。
+- Docker 镜像：`ghcr.io/luqtest/big-a-chovy:v0.6.1`，由 GitHub Actions 发布到 GitHub Container Registry；支持的架构以该次构建的清单为准。
+- `v0.6.0` 正式版及其镜像继续保留作为回退；更早的预览 Release 页面已清理，Git tag 历史不被补丁版发布移动或覆盖。
 
 完整更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
@@ -62,7 +62,7 @@ python3 -m pip install -r requirements.txt
 
 ```bash
 git fetch origin --tags
-git checkout v0.6.0
+git checkout v0.6.1
 python3 -m pip install -r requirements.txt
 ```
 
@@ -126,7 +126,7 @@ HTTPS_PROXY=http://host.docker.internal:7890
 Docker 运行版同时启动 Web 工作台和实时看板，不启动 Finder、macOS `.command` 启动器或桌面 GUI；宿主机端口默认只绑定 `127.0.0.1`，需要局域网访问时应明确修改 compose 端口映射并确认网络可信。它同样不会自动下单。正式 tag 与 Docker 镜像来自同一最终源码提交；GitHub Actions 负责构建并发布已验证架构的镜像到 GitHub Container Registry。
 
 ```bash
-docker pull ghcr.io/luqtest/big-a-chovy:v0.6.0
+docker pull ghcr.io/luqtest/big-a-chovy:v0.6.1
 ```
 
 `docker compose up -d --build` 会从当前源码 checkout 本地构建；如果需要直接使用已发布镜像，请使用上面的正式 tag，并自行确认宿主机挂载的报告、决策记录、持仓、影子样本和运行状态目录权限。源码版与镜像版都只提供筛选、证据和查询能力，不执行交易。
@@ -302,7 +302,7 @@ python3 tools/verify_t1.py 20260824
 
 影子验证只用于模拟数据统计，不能直接转化为真实仓买入依据：
 
-> ⚠️ **真实样本库保护**：工程修复和离线回归不会自动解锁真实库写入。禁止对默认本机影子库运行无参数或带 `--date` 的 `shadow_tracker.py` 扫描，也禁止对真实库使用 `detect_divergence_leader.py --record`；`--report` 仅作只读查看。测试必须设置临时 `A_SHARE_SHADOW_DATA_DIR`，并只使用人工报告和模拟行情。缺少 `fcntl` 跨进程锁的平台会明确拒绝影子库写入；Windows 原生行为尚未单独验收。真实历史库迁移、重算或恢复须另行制定方案并单独验收；测试通过、样本数量或代码版本均不构成授权。线下反馈提到的 `shadow_sample.py` 和 `每日收盘.bat` 不在当前工作副本中，先同步并核实后再使用。
+> ⚠️ **真实样本库保护**：工程修复和离线回归不会自动解锁真实库写入。禁止对默认本机影子库运行无参数或带 `--date` 的 `shadow_tracker.py` 扫描，也禁止对真实库使用 `detect_divergence_leader.py --record`；`--report` 仅作只读查看。测试必须设置临时 `A_SHARE_SHADOW_DATA_DIR`，并只使用人工报告和模拟行情。缺少 `fcntl` 与 `msvcrt` 两种跨进程锁原语的平台会明确拒绝影子库写入；Windows 原生锁由 Windows CI 验收。真实历史库迁移、重算或恢复须另行制定方案并单独验收；测试通过、样本数量或代码版本均不构成授权。线下反馈提到的 `shadow_sample.py` 和 `每日收盘.bat` 不在当前工作副本中，先同步并核实后再使用。
 
 ```bash
 # 只查看当前进度
