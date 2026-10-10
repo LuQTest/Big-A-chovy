@@ -29,6 +29,7 @@ import dashboard_settings  # 观察模式取值单一来源（strict / observe�
 import runtime_paths  # 运行状态路径唯一来源（A_SHARE_STATE_DIR 可定向到临时目录）
 import state_commit as state_commit_mod  # 回合状态提交门（超时轮不得提交运行状态）
 
+TZ = screen.TZ
 REALTIME_CONFIG = screen.RULE_CONFIG["realtime"]
 EM_TRENDS_URL = "https://push2.eastmoney.com/webguest/api/qt/stock/trends2/get"
 
@@ -440,62 +441,47 @@ def _add_cross_validation_from_row(row: dict) -> None:
 
 
 def _add_entry_exit(row: dict, e) -> None:
-    """Calculate suggested stop-loss and take-profit levels from MA/recent low."""
+    """Add framework-aligned reference levels, estimated from the current price."""
     price = getattr(e, "price", 0) or 0
-    ma5 = getattr(e, "ma5", 0) or 0
-    low = getattr(e, "low", 0) or 0
-    prev_low = getattr(e, "prior_low", 0) or 0
 
     if price <= 0:
         return
 
-    # Stop loss: below MA5 or today's low, whichever is tighter
-    stop_candidates = [x for x in [ma5, low, prev_low] if x > 0]
-    if not stop_candidates:
-        return
-    stop_loss = min(stop_candidates)
-
     entry_exit_cfg = REALTIME_CONFIG["entry_exit"]
-    # Take profit percentages are registered in tools/rule_config.py.
-    tp1 = round(price * (1 + float(entry_exit_cfg["take_profit_1_pct"]) / 100), 2)
-    tp2 = round(price * (1 + float(entry_exit_cfg["take_profit_2_pct"]) / 100), 2)
-
-    # Risk-reward ratio
+    stop_loss = round(price * (1 - float(entry_exit_cfg["stop_loss_pct"]) / 100), 2)
+    take_profit = round(price * (1 + float(entry_exit_cfg["take_profit_pct"]) / 100), 2)
     risk = price - stop_loss
-    reward = tp2 - price
+    reward = take_profit - price
     rr_ratio = round(reward / risk, 2) if risk > 0 else None
 
     row["stop_loss"] = round(stop_loss, 2)
     row["stop_loss_pct"] = round((price - stop_loss) / price * 100, 2)
-    row["take_profit_1"] = tp1
-    row["take_profit_2"] = tp2
+    row["take_profit_1"] = take_profit
+    row["take_profit_2"] = None
     row["rr_ratio"] = rr_ratio
+    row["entry_reference_price"] = round(price, 2)
+    row["exit_reference_basis"] = "按现价估算；实际计划按买点价重算"
 
 
 def _add_entry_exit_from_row(row: dict) -> None:
-    """Fallback: use row fields directly."""
+    """Fallback: add the same framework-aligned current-price reference."""
     price = row.get("price", 0) or 0
-    ma5 = row.get("ma5", 0) or 0
-    low = row.get("low", 0) or 0
 
     if price <= 0:
         return
 
-    stop_candidates = [x for x in [ma5, low] if x > 0]
-    if not stop_candidates:
-        return
-    stop_loss = min(stop_candidates)
-
-    row["stop_loss"] = round(stop_loss, 2)
-    row["stop_loss_pct"] = round((price - stop_loss) / price * 100, 2)
     entry_exit_cfg = REALTIME_CONFIG["entry_exit"]
-    tp1_multiplier = 1 + float(entry_exit_cfg["take_profit_1_pct"]) / 100
-    tp2_multiplier = 1 + float(entry_exit_cfg["take_profit_2_pct"]) / 100
-    row["take_profit_1"] = round(price * tp1_multiplier, 2)
-    row["take_profit_2"] = round(price * tp2_multiplier, 2)
+    stop_loss = round(price * (1 - float(entry_exit_cfg["stop_loss_pct"]) / 100), 2)
+    take_profit = round(price * (1 + float(entry_exit_cfg["take_profit_pct"]) / 100), 2)
+    row["stop_loss"] = stop_loss
+    row["stop_loss_pct"] = round((price - stop_loss) / price * 100, 2)
+    row["take_profit_1"] = take_profit
+    row["take_profit_2"] = None
     risk = price - stop_loss
-    reward = price * tp2_multiplier - price
+    reward = take_profit - price
     row["rr_ratio"] = round(reward / risk, 2) if risk > 0 else None
+    row["entry_reference_price"] = round(price, 2)
+    row["exit_reference_basis"] = "按现价估算；实际计划按买点价重算"
 
 
 # ── 5分钟量能模块（1分钟K滚动合成）────────────────────────────
@@ -587,8 +573,37 @@ def _is_valid_minute(hhmm: str) -> bool:
     return ("09:30" <= hhmm <= "11:30") or ("13:00" <= hhmm <= "15:00")
 
 
-def _fetch_minute_trends(code: str) -> List[Tuple[str, float, float, float, float, float, float]]:
-    """拉取当日1分钟K。返回 [(hhmm, open, close, high, low, vol_hand, amount_yuan), ...]"""
+def _parse_minute_asof(value: Any) -> Optional[datetime]:
+    """Parse a source bar timestamp, retaining its trading date and China timezone."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=TZ)
+    return parsed.astimezone(TZ)
+
+
+def _minute_snapshot_freshness(
+    snapshot: Dict[str, Any], now: Optional[datetime] = None
+) -> Tuple[Optional[float], bool]:
+    """Use the source bar time, not the download time, to decide freshness."""
+    moment = now or datetime.now(TZ)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=TZ)
+    moment = moment.astimezone(TZ)
+    asof = _parse_minute_asof(snapshot.get("bar_end_asof") or snapshot.get("bar_end"))
+    if asof is None:
+        return None, False
+    age = (moment - asof).total_seconds()
+    fresh = asof.date() == moment.date() and 0 <= age <= MIN5_STALE_LIMIT
+    return age, fresh
+
+
+def _fetch_minute_trends(code: str) -> List[Tuple[str, float, float, float, float, float, float, str]]:
+    """拉取当日1分钟K，保留行情日期与时间。"""
     params = {
         "secid": screen.secid_for(code),
         "fields1": "f1,f2,f3,f8",
@@ -603,11 +618,17 @@ def _fetch_minute_trends(code: str) -> List[Tuple[str, float, float, float, floa
         p = line.split(",")
         if len(p) < 8:
             continue
-        hhmm = p[0][-5:]
+        source_asof = _parse_minute_asof(p[0])
+        if source_asof is None:
+            continue
+        hhmm = source_asof.strftime("%H:%M")
         if not _is_valid_minute(hhmm):
             continue
         try:
-            bars.append((hhmm, float(p[1]), float(p[2]), float(p[3]), float(p[4]), float(p[5]), float(p[6])))
+            bars.append((
+                hhmm, float(p[1]), float(p[2]), float(p[3]), float(p[4]), float(p[5]), float(p[6]),
+                source_asof.isoformat(timespec="minutes"),
+            ))
         except ValueError:
             continue
     return bars
@@ -646,7 +667,7 @@ def _build_min5_snapshot(code: str) -> Dict[str, Any] | None:
     if len(bars) < 2:
         return None
 
-    now = datetime.now()
+    now = datetime.now(TZ)
     cur_hhmm = now.strftime("%H:%M")
     # 最后一根若是"当前分钟"则视为未完成
     live_bars = bars
@@ -690,6 +711,7 @@ def _build_min5_snapshot(code: str) -> Dict[str, Any] | None:
         "live_5m": live,       # 仅看板提示
         "fetched_at": time.time(),
         "bar_end": closed_bars[-1][0] if closed_bars else None,
+        "bar_end_asof": closed_bars[-1][7] if closed_bars and len(closed_bars[-1]) > 7 else None,
     }
 
 
@@ -781,10 +803,10 @@ def enrich_min5(result: dict) -> None:
             ent = snap_by_code.get(c)
             if not ent:
                 continue
-            age = int(now - ent["time"])
             snap = dict(ent["data"])
-            snap["age_seconds"] = age
-            snap["stale"] = age > MIN5_STALE_LIMIT
+            bar_age, bar_fresh = _minute_snapshot_freshness(snap, datetime.fromtimestamp(now, TZ))
+            snap["age_seconds"] = round(bar_age, 1) if bar_age is not None else None
+            snap["stale"] = not bar_fresh
             row["min5"] = snap
             closed = snap.get("closed_5m") or {}
             row["vol_ratio_5m"] = closed.get("vol_ratio_5m")
@@ -800,10 +822,10 @@ def enrich_min5(result: dict) -> None:
             ent = _min5_cache.get(c)
             if not ent:
                 continue
-            age = int(now - ent["time"])
             snap = dict(ent["data"])
-            snap["age_seconds"] = age
-            snap["stale"] = age > MIN5_STALE_LIMIT
+            bar_age, bar_fresh = _minute_snapshot_freshness(snap, datetime.fromtimestamp(now, TZ))
+            snap["age_seconds"] = round(bar_age, 1) if bar_age is not None else None
+            snap["stale"] = not bar_fresh
             remaining = int(STICKY_TTL - (now - v["last_seen"]))
             info = v.get("info") or {}
             tracking.append({
@@ -823,10 +845,10 @@ def enrich_min5(result: dict) -> None:
             ent = _min5_cache.get(c)
             if not ent:
                 continue
-            age = int(now - ent["time"])
             snap = dict(ent["data"])
-            snap["age_seconds"] = age
-            snap["stale"] = age > MIN5_STALE_LIMIT
+            bar_age, bar_fresh = _minute_snapshot_freshness(snap, datetime.fromtimestamp(now, TZ))
+            snap["age_seconds"] = round(bar_age, 1) if bar_age is not None else None
+            snap["stale"] = not bar_fresh
             mname = (_sticky.get(c) or {}).get("info", {}).get("name")
             tracking.append({
                 "code": c,
@@ -938,13 +960,15 @@ def build_minute_map(result: dict, prev_items: dict) -> Dict[str, Dict[str, Any]
                     "error": errors.get(c, "无缓存且拉取失败"),
                 }
                 continue
-            age = now - ent["time"]
             snap = ent["data"]
+            age, fresh = _minute_snapshot_freshness(
+                snap, datetime.fromtimestamp(now, TZ)
+            )
             cur = ((snap.get("closed_5m") or {}).get("cur")) or {}
             minute_map[c] = {
-                "status": "stale" if age > MIN5_STALE_LIMIT else "fresh",
-                "age_seconds": round(age, 1),
-                "last_bar_at": snap.get("bar_end"),
+                "status": "fresh" if fresh else "stale",
+                "age_seconds": round(age, 1) if age is not None else None,
+                "last_bar_at": snap.get("bar_end_asof") or snap.get("bar_end"),
                 "close_5m": cur.get("close"),
                 "vwap_5m": cur.get("vwap"),
                 "vol_5m": cur.get("vol"),

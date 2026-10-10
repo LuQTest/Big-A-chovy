@@ -12,6 +12,13 @@ from tools.rule_config import RULE_CONFIG
 
 ANNOUNCEMENT_SOURCE = "announcement_evidence"
 
+# A title that contains a hard-risk term and a resolution/negation phrase is
+# ambiguous without reading the underlying notice. Keep it fail-closed as
+# unknown instead of letting an ignore/document-type keyword produce clean.
+_RISK_RESOLUTION_MARKERS = (
+    "解除", "解冻", "撤销", "终止", "不再", "不存在", "未发生", "未涉及", "不涉及",
+)
+
 # These aliases all describe the total number of matching records, regardless
 # of where an API places them in its response envelope. ``count`` describes
 # the number of rows in the returned page and is validated separately.
@@ -35,16 +42,23 @@ def _announcement_config() -> dict[str, list[str]]:
 def classify_announcement_titles(titles: Iterable[str]) -> dict[str, list[str]]:
     """Classify titles using the same policy as the production screener."""
     config = _announcement_config()
-    result = {"avoid": [], "watch_risk": [], "other": []}
+    result = {"avoid": [], "watch_risk": [], "review": [], "ignored": [], "other": []}
     for value in titles:
         title = str(value or "").strip()
-        if not title or any(word in title for word in config["ignore_keywords"]):
+        if not title:
             continue
         bucket = "other"
-        if any(word in title for word in config["hard_keywords"]):
+        hard_match = any(word in title for word in config["hard_keywords"])
+        watch_match = any(word in title for word in config["watch_keywords"])
+        ignored = any(word in title for word in config["ignore_keywords"])
+        if hard_match and any(marker in title for marker in _RISK_RESOLUTION_MARKERS):
+            bucket = "review"
+        elif hard_match:
             bucket = "avoid"
-        elif any(word in title for word in config["watch_keywords"]):
+        elif watch_match:
             bucket = "watch_risk"
+        elif ignored:
+            bucket = "ignored"
         result[bucket].append(title)
     return result
 
@@ -53,20 +67,24 @@ def classify_announcement_risk(titles: Iterable[str]) -> dict[str, Any]:
     """Return the canonical risk result used by both evidence and screening."""
     config = _announcement_config()
     normalized = [str(value or "").strip() for value in titles if str(value or "").strip()]
-    filtered = [title for title in normalized if not any(word in title for word in config["ignore_keywords"])]
-    classification = classify_announcement_titles(filtered)
-    hard = sorted({word for title in filtered for word in config["hard_keywords"] if word in title})
-    watch = sorted({word for title in filtered for word in config["watch_keywords"] if word in title})
+    classification = classify_announcement_titles(normalized)
+    hard = sorted({word for title in classification["avoid"] for word in config["hard_keywords"] if word in title})
+    review = sorted({word for title in classification["review"] for word in config["hard_keywords"] if word in title})
+    watch = sorted({word for title in classification["watch_risk"] for word in config["watch_keywords"] if word in title})
     if hard:
         risk = RULE_CONFIG["risk"]["statuses"]["avoid"]
+    elif review:
+        risk = RULE_CONFIG["risk"]["statuses"]["unknown"]
     elif watch:
         risk = RULE_CONFIG["risk"]["statuses"]["watch_risk"]
     else:
         risk = RULE_CONFIG["risk"]["statuses"]["clean"]
     return {
         "announcement_risk": risk,
-        "announcement_keywords": hard or watch,
-        "announcement_titles": filtered[:3],
+        "announcement_keywords": hard or review or watch,
+        "announcement_titles": normalized[:3],
+        "announcement_ignored_titles": classification["ignored"][:3],
+        "announcement_review_required": bool(review),
         "classification": classification,
     }
 
