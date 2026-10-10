@@ -258,9 +258,14 @@ class DominanceAndBreakoutTests(unittest.TestCase):
         # 验证 clean 标的获得加分
         ranked = rank_capital_candidates([anchor, peer1, peer2], stats)
         peer1_row = next(r for r in ranked if r["code"] == "000603")
+        ranked_without_anchor = rank_capital_candidates([peer1], stats)
+        peer1_without_anchor = next(r for r in ranked_without_anchor if r["code"] == "000603")
         self.assertEqual(peer1_row["sector_boost"], 15.0)
         self.assertTrue(peer1_row["b_preferred"])
-        self.assertIn("主线板块协同(+15分,20亿锚点带动)", peer1_row["capital_reason"])
+        self.assertEqual(peer1_row["capital_score"], peer1_without_anchor["capital_score"])
+        self.assertEqual(peer1_row["capital_class"], peer1_without_anchor["capital_class"])
+        self.assertEqual(peer1_row["sector_experiment_score"], peer1_without_anchor["capital_score"] + 15.0)
+        self.assertIn("主线板块协同实验(+15分，未计入正式评分)", peer1_row["capital_reason"])
 
         # 验证 watch_risk 或 unknown 标的硬拒绝（不得加分）
         peer_risky = make_enriched("000603", "盛达资源", 35.0, 6.0, 1_500_000_000.0, "贵金属", 50_000_000.0, 90_000_000.0, 25_000_000.0, risk="watch_risk")
@@ -337,8 +342,10 @@ class DominanceAndBreakoutTests(unittest.TestCase):
         e.main_pct = 6.5
         e.high_pull = 0.6
         e.buy_ratio = 2.0
+        e.timestamp = int(datetime(2026, 8, 21, 10, 20).timestamp())
 
-        prev_state = {"000603": {"phase": "TRIGGERED", "confirm_count": 1, "trigger_price": 34.87}}
+        prev_state = {"000603": {"phase": "TRIGGERED", "confirm_count": 1,
+                                  "trigger_price": 34.87, "last_snapshot_id": e.timestamp - 60}}
         now_1020 = datetime(2026, 8, 21, 10, 20, 0)
 
         # 1. 处于 clean 状态 -> 成功升级 A_STRICT
@@ -366,10 +373,135 @@ class DominanceAndBreakoutTests(unittest.TestCase):
         e_nobuy.main_pct = 6.5
         e_nobuy.high_pull = 0.6
         e_nobuy.buy_ratio = None
+        e_nobuy.timestamp = e.timestamp
         eval_nobuy, _ = evaluate_watchlist_breakout_states(
             watchlist_items, {"000603": e_nobuy}, stats_with_resonance, None, prev_state, now_1020, risk_map={"000603": "clean"}
         )
         self.assertEqual(eval_nobuy[0]["breakout_class"], "B_BREAKOUT")
+
+    def test_same_source_snapshot_does_not_advance_breakout_confirmation(self):
+        item = MagicMock()
+        item.code = "000001"
+        item.main_net = 80_000_000.0
+        item.super_net = 50_000_000.0
+        item.big_net = 30_000_000.0
+        item.main_pct = 8.0
+        item.flow_5m_inc = 6_000_000.0
+        item.industry = "测试板块"
+        item.price = 10.05
+        item.price_above_vwap = True
+        item.high_pull = 0.5
+        item.buy_ratio = 2.0
+        item.risk_status = "clean"
+        source_time = int(datetime(2026, 10, 9, 10, 20).timestamp())
+        item.timestamp = source_time
+        watchlist = [{
+            "code": "000001", "name": "合成测试", "trigger": 10.0,
+            "no_chase": ">12.00不追", "industry": "测试板块",
+        }]
+        stats = {
+            "测试板块": {"strong": 3, "n": 3, "adv": 3, "sum": 3},
+            "__meta__": {"resonance_usable": True},
+        }
+        state = {"000001": {
+            "phase": "TRIGGERED", "confirm_count": 1, "trigger_price": 10.0,
+            "last_snapshot_id": source_time,
+        }}
+        now = datetime(2026, 10, 9, 10, 20)
+
+        repeated, state = evaluate_watchlist_breakout_states(
+            watchlist, {"000001": item}, stats, {}, state, now,
+            risk_map={"000001": "clean"},
+        )
+        self.assertEqual(repeated[0]["breakout_phase"], "TRIGGERED")
+        self.assertEqual(repeated[0]["confirm_count"], 1)
+        self.assertIn("确认次数不变", repeated[0]["status_note"])
+
+        item.timestamp = source_time + 60
+        advanced, _ = evaluate_watchlist_breakout_states(
+            watchlist, {"000001": item}, stats, {}, state,
+            datetime(2026, 10, 9, 10, 21), risk_map={"000001": "clean"},
+        )
+        self.assertEqual(advanced[0]["breakout_phase"], "A_STRICT")
+        self.assertEqual(advanced[0]["confirm_count"], 2)
+
+    def test_legacy_confirmation_count_requires_new_source_time_evidence(self):
+        item = MagicMock()
+        item.code = "000001"
+        item.main_net = 80_000_000.0
+        item.super_net = 50_000_000.0
+        item.big_net = 30_000_000.0
+        item.main_pct = 8.0
+        item.flow_5m_inc = 6_000_000.0
+        item.price = 10.05
+        item.price_above_vwap = True
+        item.high_pull = 0.5
+        item.buy_ratio = 2.0
+        item.industry = "测试板块"
+        watchlist = [{"code": "000001", "trigger": 10.0, "industry": "测试板块"}]
+        stats = {
+            "测试板块": {"strong": 3, "n": 3, "adv": 3, "sum": 3},
+            "__meta__": {"resonance_usable": True},
+        }
+        legacy_state = {"000001": {"phase": "TRIGGERED", "confirm_count": 2, "trigger_price": 10.0}}
+        now = datetime(2026, 10, 9, 10, 20)
+
+        item.timestamp = int(datetime(2026, 10, 9, 10, 20).timestamp())
+        rows, state = evaluate_watchlist_breakout_states(
+            watchlist, {"000001": item}, stats, {}, legacy_state, now,
+            risk_map={"000001": "clean"},
+        )
+        self.assertEqual(rows[0]["breakout_phase"], "TRIGGERED")
+        self.assertEqual(state["000001"]["confirm_count"], 1)
+        self.assertIsNotNone(state["000001"]["last_snapshot_id"])
+
+        item.timestamp = None
+        rows, state = evaluate_watchlist_breakout_states(
+            watchlist, {"000001": item}, stats, {}, legacy_state, now,
+            risk_map={"000001": "clean"},
+        )
+        self.assertEqual(rows[0]["breakout_phase"], "TRIGGERED")
+        self.assertEqual(state["000001"]["confirm_count"], 0)
+
+    def test_replayed_source_time_cannot_start_a_new_breakout(self):
+        item = MagicMock()
+        item.code = "000001"
+        item.main_net = 80_000_000.0
+        item.super_net = 50_000_000.0
+        item.big_net = 30_000_000.0
+        item.main_pct = 8.0
+        item.flow_5m_inc = 6_000_000.0
+        item.price = 10.05
+        item.price_above_vwap = True
+        item.high_pull = 0.5
+        item.buy_ratio = 2.0
+        item.industry = "测试板块"
+        source_time = int(datetime(2026, 10, 9, 10, 20).timestamp())
+        item.timestamp = source_time
+        watchlist = [{"code": "000001", "trigger": 10.0, "industry": "测试板块"}]
+        stats = {
+            "测试板块": {"strong": 3, "n": 3, "adv": 3, "sum": 3},
+            "__meta__": {"resonance_usable": True},
+        }
+        watching = {"000001": {
+            "phase": "WATCHING", "confirm_count": 0, "trigger_price": 10.0,
+            "last_snapshot_id": source_time,
+        }}
+
+        repeated, state = evaluate_watchlist_breakout_states(
+            watchlist, {"000001": item}, stats, {}, watching,
+            datetime(2026, 10, 9, 10, 20), risk_map={"000001": "clean"},
+        )
+        self.assertEqual(repeated[0]["breakout_phase"], "WATCHING")
+        self.assertEqual(state["000001"]["confirm_count"], 0)
+
+        item.timestamp = source_time + 60
+        advanced, state = evaluate_watchlist_breakout_states(
+            watchlist, {"000001": item}, stats, {}, state,
+            datetime(2026, 10, 9, 10, 21), risk_map={"000001": "clean"},
+        )
+        self.assertEqual(advanced[0]["breakout_phase"], "TRIGGERED")
+        self.assertEqual(state["000001"]["confirm_count"], 1)
 
 
 if __name__ == "__main__":

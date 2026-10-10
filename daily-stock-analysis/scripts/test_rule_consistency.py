@@ -64,7 +64,8 @@ class RuleConsistencyTests(unittest.TestCase):
         self.assertFalse(experiment["enabled"])
         self.assertEqual(experiment["permission"], "simulated_only")
         self.assertEqual(screening["watchlist"]["score_dist60_scale"], 1.0)
-        self.assertEqual(RULE_CONFIG["realtime"]["entry_exit"]["take_profit_1_pct"], 3.0)
+        self.assertEqual(RULE_CONFIG["realtime"]["entry_exit"]["take_profit_pct"], 2.0)
+        self.assertEqual(RULE_CONFIG["realtime"]["entry_exit"]["stop_loss_pct"], 3.0)
 
     def test_complete_shadow_result_requires_daily_kline_and_all_metrics(self):
         incomplete = {

@@ -46,10 +46,13 @@ class BreakoutRiskMatrixTests(unittest.TestCase):
     def _run(self, risk: str):
         code = "600301"
         enriched = {code: _breakout_enriched(code)}
+        source_time = int(datetime(2026, 10, 2, 10, 4).timestamp())
+        enriched[code].timestamp = source_time
         previous = {code: {
             "code": code, "phase": "TRIGGERED", "confirm_count": 1,
             "trigger_price": 12.0, "no_chase_price": 12.3, "buy_zone": "11.8-12.1",
             "invalid": 11.6, "no_chase": ">12.3不追", "industry": "半导体",
+            "last_snapshot_id": source_time - 60,
         }}
         rows, _state = screen.evaluate_watchlist_breakout_states(
             [_watchlist_item(code)], enriched, STATS, None, previous,

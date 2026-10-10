@@ -47,6 +47,9 @@ class CapitalFlowRankingTests(unittest.TestCase):
         row = rank_capital_candidates([item], {"测试板块": {"strong": 3}})[0]
 
         self.assertEqual(row["capital_data"], "仅当前快照")
+        self.assertEqual(row["capital_class"], "评级未确认")
+        self.assertEqual(row["capital_class_candidate"], "资金B类")
+        self.assertFalse(row["capital_class_confirmed"])
         self.assertNotIn("持续流入", row["capital_reason"])
 
     def test_distribution_signal_is_never_a_class(self):

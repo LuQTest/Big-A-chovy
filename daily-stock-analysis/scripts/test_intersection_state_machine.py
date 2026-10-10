@@ -312,5 +312,53 @@ class ExpiryTests(unittest.TestCase):
         self.assertEqual(phase_of(state, "000001"), PHASE_EXPIRED)
 
 
+class CurrentEntryEligibilityTests(unittest.TestCase):
+    """历史锁存相位不能冒充本轮的双池、分钟与门槛证据。"""
+
+    def test_latched_entry_without_current_candidate_or_minute_is_not_actionable(self):
+        _, state = StrictOrderTests().full_path_state()
+        rows, next_state = run([], [], state, at(10, 8), minute={})
+
+        self.assertEqual(phase_of(next_state, "000001"), PHASE_ENTRY)
+        self.assertTrue(rows[0].get("latched_hold"))
+        self.assertFalse(rows[0]["actionable"])
+        self.assertFalse(rows[0]["new_open_eligible"])
+        self.assertIn("本轮未出现在双池交集", rows[0]["entry_block_reason"])
+        self.assertIn("分钟K证据", rows[0]["entry_block_reason"])
+
+    def test_current_gate_failure_blocks_new_open_eligibility(self):
+        _, state = StrictOrderTests().full_path_state()
+        failures = ["5分钟资金未为正"]
+        rows, _ = run(
+            [inter_row(gate_failures=failures)], [], state, at(10, 8),
+            minute={"000001": fresh_min(vol=4000)},
+        )
+
+        self.assertFalse(rows[0]["new_open_eligible"])
+        self.assertIn("5分钟资金未为正", rows[0]["entry_block_reason"])
+
+    def test_string_gate_failure_is_reported_as_one_reason(self):
+        _, state = StrictOrderTests().full_path_state()
+        rows, _ = run(
+            [inter_row(gate_failures="资金门槛失败")], [], state, at(10, 8),
+            minute={"000001": fresh_min(vol=4100, close=9.92, vwap=9.86)},
+        )
+        self.assertFalse(rows[0]["new_open_eligible"])
+        self.assertEqual(rows[0]["entry_block_reason"], "资金门槛失败")
+
+    def test_current_intersection_gates_are_recomputed_without_gate_fields(self):
+        _, state = StrictOrderTests().full_path_state()
+        # Production strict-pool rows have no precomputed gate_failures field.
+        rows, _ = run(
+            [inter_row(price=9.92, high=10.0, main_net=-1_000_000)], [], state,
+            at(10, 8),
+            minute={"000001": fresh_min(vol=4100, close=9.92, vwap=9.86)},
+        )
+
+        self.assertFalse(rows[0]["new_open_eligible"])
+        self.assertIn("主力净占比未为正", rows[0]["gate_failure_text"])
+        self.assertIn("主力净占比未为正", rows[0]["entry_block_reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

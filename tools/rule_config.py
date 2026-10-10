@@ -370,8 +370,8 @@ RULE_CONFIG: Dict[str, Any] = {
             "pullback_max_exclusive": 3.0,
         },
         "entry_exit": {
-            "take_profit_1_pct": 3.0,
-            "take_profit_2_pct": 5.0,
+            "stop_loss_pct": 3.0,
+            "take_profit_pct": 2.0,
         },
     },
     "intersection": {

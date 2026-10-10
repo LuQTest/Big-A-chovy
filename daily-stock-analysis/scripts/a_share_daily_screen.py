@@ -211,6 +211,16 @@ EM_FFLOW_MINUTE_URLS = [
     "https://push2.eastmoney.com/webguest/api/qt/stock/fflow/kline/get",
     "https://82.push2.eastmoney.com/webguest/api/qt/stock/fflow/kline/get",
 ]
+# Historical daily capital flow is served by Eastmoney's daykline endpoint.
+# Unlike the webguest intraday endpoint, push2his returns the date series.
+EM_FFLOW_DAILY_URLS = [
+    "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
+    "https://1.push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
+    "https://82.push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
+]
+LOW_OPEN_DAILY_FLOW_SESSIONS = 20
+LOW_OPEN_DAILY_FLOW_MAX_CODES_PER_ROUND = 20
+LOW_OPEN_DAILY_FLOW_CACHE_SECONDS = 12 * 60 * 60
 ANNOUNCEMENT_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 
 CLIST_FIELDS = "f12,f14,f2,f3,f4,f5,f6,f7,f8,f10,f15,f16,f17,f18,f20,f21,f100,f124,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87"
@@ -2420,47 +2430,154 @@ def _should_exclude_from_low_absorb(
     return False, ""
 
 
-# ── 低开洗盘模块（低开≥2% + 翻红 + 均价线上 + 当日主力净流入 + 20日持续净流入）──
-def _qualifies_low_open_wash(e: "Enriched", flow_history) -> bool:
-    """判定单只 Enriched 是否满足低开洗盘四条件。
+# ── 低开洗盘模块（低开≥2% + 高于昨收 + 均价线上 + 当日/20日主力净流入为正）──
+def fetch_daily_main_flow_history(
+    code: str, expected_date: str, *, allow_request: bool = True
+) -> Dict[str, Any]:
+    """Fetch 20 completed daily main-flow bars preceding the current market date.
 
-    条件1 低开≥2%：今开 ≤ 昨收*0.98
-    条件2 翻红：现价 > 今开
-    条件3 站上均价线：price_above_vwap
-    条件4 当日主力净流入为正：main_net > 0
-    条件5 20日持续净流入：用会话累计资金流验证，无历史则退回当日主力净流入
+    Intraday cumulative snapshots are deliberately not accepted here. The
+    current session is checked separately from ``e.main_net``.
     """
-    if e is None:
-        return False
-    if not (is_number(e.open) and is_number(e.prev_close) and is_number(e.price)
-            and e.main_net is not None and e.main_net == e.main_net):
+    code = str(code or "")
+    expected_date = str(expected_date or "")[:10]
+    try:
+        datetime.strptime(expected_date, "%Y-%m-%d")
+    except ValueError:
+        return {"status": "unavailable", "sessions": 0, "persistent_net": None}
+    cache_key = (code, expected_date)
+    now = time.time()
+    with _LOW_OPEN_DAILY_FLOW_CACHE_LOCK:
+        cached = _LOW_OPEN_DAILY_FLOW_CACHE.get(cache_key)
+        if cached:
+            ttl = LOW_OPEN_DAILY_FLOW_CACHE_SECONDS if cached[1].get("status") == "complete" else 120
+            if now - cached[0] <= ttl:
+                return {**cached[1], "_request_made": False}
+    if not allow_request:
+        return {"status": "unavailable", "sessions": 0, "persistent_net": None,
+                "reason": "本轮历史资金查询额度已用完", "_request_made": False}
+
+    params = {
+        "secid": secid_for(code),
+        "fields1": "f1,f2,f3,f7",
+        "fields2": "f51,f52,f56",
+        "klt": "101",
+        "lmt": str(LOW_OPEN_DAILY_FLOW_SESSIONS + 20),
+        "beg": "0",
+        "end": "20500101",
+    }
+    last_error: Optional[Exception] = None
+    best_result: Optional[Dict[str, Any]] = None
+    for url in _rank_urls(EM_FFLOW_DAILY_URLS):
+        _pace_flow_minute_request()
+        try:
+            payload = fetch_json(url, params, timeout=6)
+        except Exception as exc:
+            last_error = exc
+            _mark_host_failed(url)
+            continue
+        data = payload.get("data") if isinstance(payload, dict) else None
+        rows = data.get("klines") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            rows = []
+        by_date: Dict[str, float] = {}
+        for line in rows:
+            parts = str(line).split(",")
+            if len(parts) < 2:
+                continue
+            bar_date = parts[0].strip()[:10]
+            try:
+                datetime.strptime(bar_date, "%Y-%m-%d")
+                main_net = float(parts[1])
+            except (TypeError, ValueError):
+                continue
+            if bar_date < expected_date and math.isfinite(main_net):
+                by_date[bar_date] = main_net
+        latest = sorted(by_date.items())[-LOW_OPEN_DAILY_FLOW_SESSIONS:]
+        result: Dict[str, Any] = {
+            "status": "complete" if len(latest) == LOW_OPEN_DAILY_FLOW_SESSIONS else "insufficient",
+            "sessions": len(latest),
+            "persistent_net": round(sum(value for _, value in latest), 2)
+            if len(latest) == LOW_OPEN_DAILY_FLOW_SESSIONS else None,
+            "first_date": latest[0][0] if latest else None,
+            "last_date": latest[-1][0] if latest else None,
+            "source": "eastmoney_push2his_daykline",
+        }
+        _mark_host_ok(url)
+        if result["status"] == "complete":
+            best_result = result
+            break
+        if best_result is None or result["sessions"] > best_result["sessions"]:
+            best_result = result
+
+    if best_result is None:
+        best_result = {
+            "status": "unavailable", "sessions": 0, "persistent_net": None,
+            "reason": str(last_error) if last_error else "历史资金接口无有效数据",
+        }
+    with _LOW_OPEN_DAILY_FLOW_CACHE_LOCK:
+        _LOW_OPEN_DAILY_FLOW_CACHE[cache_key] = (now, dict(best_result))
+    return {**best_result, "_request_made": True}
+
+
+def _low_open_wash_current_conditions(e: "Enriched") -> bool:
+    """Check low-open, red versus previous close, VWAP, and current-day flow."""
+    if e is None or not all(
+        is_number(value) and math.isfinite(float(value))
+        for value in (e.open, e.prev_close, e.price, e.main_net)
+    ):
         return False
     wash_cfg = SCREENING_CONFIG["low_open_wash"]
-    if not (e.open <= e.prev_close * float(wash_cfg["open_max_prev_close_multiplier"])):
-        return False
-    if not (e.price > e.open):
-        return False
-    if not e.price_above_vwap:
-        return False
-    if not (e.main_net > 0):
-        return False
-    hist = (flow_history or {}).get(e.code) or []
-    if hist:
-        return sum(float(h.get("main_net", 0.0)) for h in hist) > 0
-    return True
+    return bool(
+        e.prev_close > 0
+        and e.open <= e.prev_close * float(wash_cfg["open_max_prev_close_multiplier"])
+        and e.price > e.prev_close
+        and e.price_above_vwap
+        and e.main_net > 0
+    )
 
 
-def low_open_wash_rows(enriched: List["Enriched"], flow_history) -> List[Dict[str, Any]]:
-    """筛选低开洗盘候选，返回可直接进前端的行（含低开%/20日累计净流入字段）。"""
+def _qualifies_low_open_wash(e: "Enriched", daily_flow: Optional[Dict[str, Any]]) -> bool:
+    """Require complete 20-session historical evidence; no intraday fallback."""
+    return bool(
+        _low_open_wash_current_conditions(e)
+        and daily_flow
+        and daily_flow.get("status") == "complete"
+        and is_number(daily_flow.get("persistent_net"))
+        and float(daily_flow["persistent_net"]) > 0
+    )
+
+
+def low_open_wash_rows(
+    enriched: List["Enriched"], expected_date: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Return qualified and pending low-open observations with honest 20-day status."""
     out: List[Dict[str, Any]] = []
+    requested_codes: set[str] = set()
+    market_date = str(expected_date or "")[:10]
     for e in enriched:
-        if not _qualifies_low_open_wash(e, flow_history):
+        if not _low_open_wash_current_conditions(e):
             continue
+        asof = market_date or str(getattr(e, "kdate", "") or "")[:10]
+        can_request = e.code in requested_codes or len(requested_codes) < LOW_OPEN_DAILY_FLOW_MAX_CODES_PER_ROUND
+        daily_flow = fetch_daily_main_flow_history(e.code, asof, allow_request=can_request)
+        if daily_flow.get("_request_made"):
+            requested_codes.add(e.code)
+        if daily_flow.get("status") == "complete" and not _qualifies_low_open_wash(e, daily_flow):
+            continue
+
         d = dict(asdict(e))
-        d["low_open_pct"] = round((e.open - e.prev_close) / e.prev_close * 100, 2) \
-            if (is_number(e.open) and is_number(e.prev_close) and e.prev_close) else 0.0
-        hist = (flow_history or {}).get(e.code) or []
-        d["persistent_net"] = round(sum(float(h.get("main_net", 0.0)) for h in hist), 2) if hist else (e.main_net or 0.0)
+        d["low_open_pct"] = round((e.open - e.prev_close) / e.prev_close * 100, 2)
+        d["persistent_net"] = daily_flow.get("persistent_net")
+        d["persistent_flow_sessions"] = daily_flow.get("sessions", 0)
+        d["persistent_flow_status"] = (
+            "20日累计为正，条件通过" if _qualifies_low_open_wash(e, daily_flow)
+            else "20日历史数据不足，未通过"
+            if daily_flow.get("status") == "insufficient"
+            else "20日历史数据不可用，未通过"
+        )
+        d["wash_qualified"] = _qualifies_low_open_wash(e, daily_flow)
+        d["persistent_flow_asof"] = daily_flow.get("last_date")
         out.append(d)
     return out
 
@@ -2805,6 +2922,8 @@ FLOW_MINUTE_MAX_CODES_PER_ROUND = 20    # 每轮最多为多少只补 5/15 分�
 # 否则补齐按主力净额取前 20 只后，安全类判定会全部退回"无法核验"。
 FLOW_MINUTE_SAFETY_RESERVE = 5
 _FLOW_MINUTE_CACHE: Dict[str, Any] = {}
+_LOW_OPEN_DAILY_FLOW_CACHE: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
+_LOW_OPEN_DAILY_FLOW_CACHE_LOCK = threading.Lock()
 _FLOW_MINUTE_LOCK = threading.Lock()
 _FLOW_MINUTE_LAST_REQUEST_AT = 0.0
 # 每轮的请求预算：由 fetch_flow_minutes 统一扣减，新增调用点不会绕过上限
@@ -3415,13 +3534,13 @@ def rank_capital_candidates(
     candidates: List[Enriched], stats: Dict[str, Dict[str, Any]],
     flow_history: Optional[Dict[str, List[Dict[str, Any]]]] = None
 ) -> List[Dict[str, Any]]:
-    """Rank strict-pool candidates by verifiable capital-flow confirmation and sector boost.
+    """Rank strict-pool candidates by formal flow evidence; annotate sector experiments separately.
 
-    - 支持主线板块协同加分器 (sector_boost: +10~15分)
+    - 主线板块协同分只作为实验字段，不参与正式评分、评级或排序
     - 板块锚点条件: 成交额>20亿 且 主力净额>0 且 超大单主导(A或B) 且 VWAP上方 且 高位回落<2.0%
     - 板块共振条件: 至少3只共振，或锚点外另有2只共振（即锚点>=1 且 共振>=3 或 锚点外>=2）
     - 赋分条件: clean 且 主力>5% 且 VWAP上方 且 超单主导 且 回落<2%
-    - 赋予 sector_boost 与 B类优选资格 (b_preferred)
+    - 缺少5分钟基准时，正式评级标记未确认
     - 板块内归一化排序兼顾 5分钟净额 与 5分钟净额/成交额
     """
     sector_cfg = SCREENING_CONFIG["sector_boost"]
@@ -3517,7 +3636,8 @@ def rank_capital_candidates(
             sector_boost = float(sector_cfg["boost_points"])
             b_preferred = True
 
-        score = main_points + super_points + persistence_points + price_points + sector_points + sector_boost
+        # The formal capital score and rank exclude the unvalidated sector experiment.
+        score = main_points + super_points + persistence_points + price_points + sector_points
 
         reasons: List[str] = []
         if getattr(e, "flow_veto", ""):
@@ -3539,7 +3659,7 @@ def rank_capital_candidates(
         elif not resonance_usable:
             reasons.append("板块共振数据质量降级，未加分")
         if sector_boost > 0:
-            reasons.append(f"主线板块协同(+{int(sector_boost)}分,20亿锚点带动)")
+            reasons.append(f"主线板块协同实验(+{int(sector_boost)}分，未计入正式评分)")
 
         if e.flow_status == "疑似派发":
             score -= float(score_cfg["penalty_distribution"])
@@ -3559,11 +3679,16 @@ def rank_capital_candidates(
 
         score = round(max(0.0, min(100.0, score)), 1)
         if e.flow_status == "疑似派发" or score < float(score_cfg["capital_class_c_score_max_exclusive"]):
-            capital_class = "资金C类"
+            capital_class_candidate = "资金C类"
         elif score >= float(score_cfg["capital_class_a_score_min_inclusive"]) and e.main_net > 0 and e.price_above_vwap:
-            capital_class = "资金A类"
+            capital_class_candidate = "资金A类"
         else:
-            capital_class = "资金B类"
+            capital_class_candidate = "资金B类"
+        capital_class_confirmed = has_5m
+        capital_class = capital_class_candidate if capital_class_confirmed else "评级未确认"
+        if not capital_class_confirmed:
+            reasons.append("缺少5分钟基准，正式评级未确认")
+        sector_experiment_score = round(min(100.0, score + sector_boost), 1)
 
         # 板块内归一化弹性得分（兼顾 5分净额与 5分/成交额）
         norm_score = score
@@ -3577,6 +3702,9 @@ def rank_capital_candidates(
             **asdict(e),
             "capital_score": score,
             "capital_class": capital_class,
+            "capital_class_candidate": capital_class_candidate,
+            "capital_class_confirmed": capital_class_confirmed,
+            "sector_experiment_score": sector_experiment_score,
             "capital_data": capital_data_label(e, has_5m),
             "capital_reason": "；".join(reasons),
             "resonance": "是" if resonance else ("数据质量降级" if not resonance_usable else "否"),
@@ -3993,6 +4121,12 @@ def _minute_freshness(
         return False, None, "fetch_failed", "分钟K获取失败"
     if not is_number(age):
         return False, None, "fetch_failed", "分钟K无有效时间戳"
+    if status != "fresh":
+        if status == "stale" and age > limit:
+            return False, float(age), "stale", f"分钟K过期({age:.0f}秒)"
+        return False, float(age), status or "unknown", "分钟K来源时间未验证"
+    if age < 0:
+        return False, float(age), "stale", "分钟K来源时间晚于当前时间"
     if age > limit:
         return False, float(age), "stale", f"分钟K过期({age:.0f}秒)"
     return True, float(age), "fresh", ""
@@ -4183,8 +4317,29 @@ def evaluate_intersection_states(
         fresh, m_age, m_status, _m_block = _minute_freshness(minute_info, cfg)
         flow_veto = str(row.get("flow_veto") or "")
         allowed, block = _entry_allowed(risk, flow_veto)
-        eligible = phase_code == PHASE_ENTRY and allowed
-        entry_block = item.get("entry_block_reason") or ("" if allowed else block)
+        entry_blocks: List[str] = []
+        gate_failures = row.get("gate_failures") or []
+        if isinstance(gate_failures, str):
+            gate_failures = [gate_failures]
+        gate_failures = [str(value) for value in gate_failures if str(value)]
+        if phase_code == PHASE_ENTRY:
+            if code not in current_inter:
+                entry_blocks.append("本轮未出现在双池交集")
+            else:
+                current_gates = _pre_gates(current_inter[code], cfg)
+                gate_failures.extend(
+                    str(value) for value in (current_gates.get("failures") or []) if str(value)
+                )
+            gate_failures = list(dict.fromkeys(gate_failures))
+            entry_blocks.extend(gate_failures)
+            if not fresh:
+                entry_blocks.append(f"分钟K证据{m_status}")
+            if not allowed:
+                entry_blocks.append(block)
+        eligible = phase_code == PHASE_ENTRY and not entry_blocks
+        entry_block = "；".join(dict.fromkeys(entry_blocks))
+        if phase_code != PHASE_ENTRY:
+            entry_block = item.get("entry_block_reason") or ("" if allowed else block)
         row.update({
             "intersection_phase": label,
             "phase_code": phase_code,
@@ -4226,8 +4381,12 @@ def evaluate_intersection_states(
             "market_breadth_pct": breadth_pct,
             "past_entry_deadline": past_deadline,
             "deadline_note": "已过新开仓截止，仅供明日观察" if past_deadline else "",
-            "gate_failures": row.get("gate_failures") or [],
-            "gate_failure_text": row.get("gate_failure_text") or "全部通过",
+            "gate_failures": gate_failures,
+            "gate_failure_text": (
+                "；".join(gate_failures) or "全部通过"
+                if phase_code == PHASE_ENTRY
+                else row.get("gate_failure_text") or "全部通过"
+            ),
             "intersection_config_version": str(cfg.get("version", INTERSECTION_CONFIG_VERSION)),
             "intersection_config_source": str(cfg.get("source", "default")),
         })
@@ -4566,6 +4725,22 @@ def save_watchlist_breakout_state(
     )
 
 
+def _breakout_snapshot_epoch(value: Any) -> Optional[float]:
+    """Normalize a source quote timestamp or persisted ISO timestamp to epoch seconds."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = float(value)
+        return number if math.isfinite(number) and number > 0 else None
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=TZ)
+    return parsed.timestamp()
+
+
 def evaluate_watchlist_breakout_states(
     watchlist_items: List[Dict[str, Any]],
     enriched_by_code: Dict[str, Enriched],
@@ -4580,7 +4755,7 @@ def evaluate_watchlist_breakout_states(
     流转路径: WATCHING → TRIGGERED → CONFIRMED → B_BREAKOUT → A_STRICT
     - 跨交易日合并：将昨日已持久化的观察池标的与今日新候选求并集，确保昨日标的在次日开盘能无缝流转
     - 09:30–09:40 原则上只观察（不可直升 B_BREAKOUT/A_STRICT）
-    - 至少 2 次快照确认
+    - 至少 2 个来源行情时间递增的快照确认；重复消费同一行情不计数
     - avoid 一票否决
     - 超过追高禁区、跌回触发价或 5 分钟转负立即降级重置
     """
@@ -4632,6 +4807,9 @@ def evaluate_watchlist_breakout_states(
         prev = (previous_state or {}).get(code) or {}
         prev_phase = prev.get("phase", "WATCHING")
         confirm_count = prev.get("confirm_count", 0)
+        source_snapshot_id = _breakout_snapshot_epoch(getattr(e, "timestamp", None)) if e else None
+        previous_snapshot_id = _breakout_snapshot_epoch(prev.get("last_snapshot_id"))
+        last_snapshot_id = previous_snapshot_id
 
         p_val = getattr(e, "price", None)
         cur_price = float(p_val) if isinstance(p_val, (int, float)) else float(item.get("price", 0))
@@ -4689,8 +4867,28 @@ def evaluate_watchlist_breakout_states(
             # 价格突破触发价且 5分增量 >= 500万
             if flow_5m >= float(breakout_cfg["flow_5m_min"]):
                 if prev_phase in ("TRIGGERED", "CONFIRMED", "B_BREAKOUT", "A_STRICT"):
-                    # 连续确认
-                    confirm_count += 1
+                    # Only a newer source quote is an additional confirmation.
+                    snapshot_note = ""
+                    if (
+                        source_snapshot_id is not None
+                        and previous_snapshot_id is not None
+                        and source_snapshot_id > previous_snapshot_id
+                    ):
+                        confirm_count += 1
+                        last_snapshot_id = source_snapshot_id
+                    elif previous_snapshot_id is None and source_snapshot_id is not None:
+                        # Legacy state had no source ID. Establish a baseline,
+                        # and discard unprovable legacy confirmations. This is at
+                        # most the first source-time-backed confirmation.
+                        confirm_count = 1
+                        last_snapshot_id = source_snapshot_id
+                        snapshot_note = "已记录行情时间基准，本轮不增加确认"
+                    elif source_snapshot_id is None:
+                        if previous_snapshot_id is None:
+                            confirm_count = 0
+                        snapshot_note = "缺少行情来源时间，确认次数不变"
+                    else:
+                        snapshot_note = "重复或回退的行情快照，确认次数不变"
                     # 突破确认门槛：站稳 >= 2 期 + VWAP 上方 + 超单主导 (A或B) + 板块共振
                     if (
                         confirm_count >= int(breakout_cfg["confirmations_min"])
@@ -4736,16 +4934,41 @@ def evaluate_watchlist_breakout_states(
                         if dom_type not in ("absolute", "coalition"): missing_notes.append("超单未主导")
                         if not res: missing_notes.append("板块无共振")
                         status_note = f"突破触发·等待确认({confirm_count}/2期, 待满足:{','.join(missing_notes)})"
+                        if snapshot_note:
+                            status_note += f"；{snapshot_note}"
                 else:
-                    cur_phase = "TRIGGERED"
-                    breakout_class = "TRIGGERED"
-                    confirm_count = 1
-                    status_note = "初次放量突破触发价"
+                    if source_snapshot_id is None:
+                        cur_phase = "WATCHING"
+                        breakout_class = "WATCHING"
+                        confirm_count = 0
+                        status_note = "缺少行情来源时间，不能记录首次确认"
+                    elif (
+                        previous_snapshot_id is not None
+                        and source_snapshot_id <= previous_snapshot_id
+                    ):
+                        cur_phase = "WATCHING"
+                        breakout_class = "WATCHING"
+                        confirm_count = 0
+                        status_note = "重复或回退的行情快照，不能记录首次确认"
+                    else:
+                        cur_phase = "TRIGGERED"
+                        breakout_class = "TRIGGERED"
+                        confirm_count = 1
+                        last_snapshot_id = source_snapshot_id
+                        status_note = "初次放量突破触发价"
             else:
                 cur_phase = "WATCHING"
                 breakout_class = "WATCHING"
                 confirm_count = 0
                 status_note = f"突破但5分量能不足({flow_5m/10000:.0f}万 < 500万)"
+
+        # Persist every newest source quote ID, including snapshots that fail a
+        # gate, so replaying that same quote cannot later become a new trigger.
+        if (
+            source_snapshot_id is not None
+            and (previous_snapshot_id is None or source_snapshot_id > previous_snapshot_id)
+        ):
+            last_snapshot_id = source_snapshot_id
 
         # 更新状态持久化
         item_state = {
@@ -4769,6 +4992,7 @@ def evaluate_watchlist_breakout_states(
             "risk_status": risk,
             "status_note": status_note,
             "last_updated": now_text,
+            "last_snapshot_id": last_snapshot_id,
         }
         next_state[code] = item_state
 
@@ -4964,12 +5188,13 @@ def render_markdown(result: Dict[str, Any]) -> str:
             flow_amount_str(r.get("super_net", 0)),
             flow_amount_str(r.get("flow_5m_inc", float('nan'))),
             r.get("vwap_state", ""), r.get("resonance", "否"),
+            r.get("capital_class_candidate", ""), _fmt(r.get("sector_experiment_score"), 1),
             r.get("capital_data", ""), r.get("capital_reason", ""),
         ] for r in result["capital_rank"]]
         lines += ["", "## 主力资金优选（候选池二次排序）", markdown_table(
-            ["资金类", "原始来源", "代码", "名称", "交易板", "现价", "涨幅", "区间分位", "资金评分", "主力净额",
+            ["资金类", "原始来源", "代码", "名称", "交易板", "现价", "涨幅", "区间分位", "正式评分", "主力净额",
              "主力净占比", "超大单", "5分钟增量", "均价线", "板块共振",
-             "数据完整度", "评分依据"], rows)]
+             "候选评级", "板块实验分（不计正式评级）", "数据完整度", "评分依据"], rows)]
 
     raw_dual_pool = result.get("dual_pool_raw") if "dual_pool_raw" in result else result.get("dual_pool") or []
     if raw_dual_pool:
@@ -5100,12 +5325,13 @@ def render_markdown(result: Dict[str, Any]) -> str:
             flow_amount_str(r.get("flow_5m_inc", 0)),
             r.get("vwap_state", ""),
             flow_amount_str(r.get("persistent_net", 0)),
+            r.get("persistent_flow_status", "未核验"),
             r.get("industry", ""),
             announcement_label(r),
         ] for r in result["low_open_wash"]]
         lines += ["", "## 低开洗盘（实验性观察补充 · 不计入主/次级信号 · 永不自动出手）",
-                   "> ⚠️ 不在 7/30 收敛核心框架内。条件：低开≥2% + 翻红 + 站上均价线 + 当日主力净流入正 + 20日持续净流入。匹配即进观察，不参与主/次级判定，也绝不自动出手。",
-                   markdown_table(["代码", "名称", "今开", "昨收", "低开%", "现价/涨幅", "主力净占比", "5分钟增量", "均价线", "20日累计净流入", "板块", "公告风险"], rows)]
+                   "> 仅进观察，不作为独立开仓信号。条件：低开≥2%、现价高于昨收并站上均价线、当日主力净流入为正，且此前最近20个已完整结算交易日累计主力净流入为正。历史数据不足的行仅作待核验观察，不通过该条件；盘中快照不充当20日数据。",
+                   markdown_table(["代码", "名称", "今开", "昨收", "低开%", "现价/涨幅", "主力净占比", "5分钟增量", "均价线", "20日累计净流入", "20日验证", "板块", "公告风险"], rows)]
     # 历史快照兼容：旧结果带独立「扩展交易板观察」列表时按原口径原样渲染，
     # **不把旧结果重新解释成完整筛选结果**。新结果不再有这一节——三板都进正式栏目。
     if "extended_board_observations" in result:
@@ -5681,7 +5907,7 @@ def run_screening_core(
         "sector_indices": sector_indices,
         "has_snapshot": has_snapshot,
         "flow_minute_filled": flow_minute_filled,
-        "low_open_wash": low_open_wash_rows(enriched, flow_history),
+        "low_open_wash": low_open_wash_rows(enriched, expected_date=ts.strftime("%Y-%m-%d")),
     }
 
     # 看板专有列表（负超单观察等）在公告核验前并入，确保它们与正式池读到同一份风险结果。
